@@ -18,6 +18,7 @@
 #include <asm/text-patching.h>
 #include <asm/unwind.h>
 #include <asm/cfi.h>
+#include <asm/vsyscall.h>
 
 static bool all_callee_regs_used[4] = {true, true, true, true};
 
