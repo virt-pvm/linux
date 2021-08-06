@@ -639,6 +639,19 @@ pmd_t pmdp_invalidate_ad(struct vm_area_struct *vma, unsigned long address,
 }
 #endif
 
+#ifdef CONFIG_X86_32
+/*
+ * Leave one empty page between vmalloc'ed areas and
+ * the start of the fixmap.
+ */
+#define __FIXADDR_TOP_BASE	0xfffff000
+#else
+#define __FIXADDR_TOP_BASE	(0xffffffffff600000UL - PAGE_SIZE)
+#endif
+
+unsigned long __FIXADDR_TOP = __FIXADDR_TOP_BASE;
+EXPORT_SYMBOL(__FIXADDR_TOP);
+
 /**
  * reserve_top_address - reserves a hole in the top of kernel address space
  * @reserve - size of hole to reserve

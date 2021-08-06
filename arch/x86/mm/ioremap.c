@@ -879,10 +879,9 @@ void __init early_ioremap_init(void)
 	pmd_t *pmd;
 
 #ifdef CONFIG_X86_64
-	BUILD_BUG_ON((fix_to_virt(0) + PAGE_SIZE) & ((1 << PMD_SHIFT) - 1));
-#else
-	WARN_ON((fix_to_virt(0) + PAGE_SIZE) & ((1 << PMD_SHIFT) - 1));
+	BUG_ON(__fix_to_virt(__end_of_fixed_addresses) <= MODULES_END);
 #endif
+	WARN_ON((fix_to_virt(0) + PAGE_SIZE) & ((1 << PMD_SHIFT) - 1));
 
 	early_ioremap_setup();
 

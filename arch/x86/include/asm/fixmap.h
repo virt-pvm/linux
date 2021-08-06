@@ -40,21 +40,8 @@
 #include <linux/threads.h>
 #endif
 
-/*
- * We can't declare FIXADDR_TOP as variable for x86_64 because vsyscall
- * uses fixmaps that relies on FIXADDR_TOP for proper address calculation.
- * Because of this, FIXADDR_TOP x86 integration was left as later work.
- */
-#ifdef CONFIG_X86_32
-/*
- * Leave one empty page between vmalloc'ed areas and
- * the start of the fixmap.
- */
 extern unsigned long __FIXADDR_TOP;
 #define FIXADDR_TOP	((unsigned long)__FIXADDR_TOP)
-#else
-#define FIXADDR_TOP	(0xffffffffff600000UL - PAGE_SIZE)
-#endif
 
 /*
  * Here we define all the compile-time 'special' virtual
