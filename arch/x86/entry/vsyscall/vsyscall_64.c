@@ -35,7 +35,6 @@
 
 #include <asm/vsyscall.h>
 #include <asm/unistd.h>
-#include <asm/fixmap.h>
 #include <asm/traps.h>
 #include <asm/paravirt.h>
 
@@ -391,7 +390,4 @@ void __init map_vsyscall(void)
 
 	if (vsyscall_mode == XONLY)
 		vm_flags_init(&gate_vma, VM_EXEC);
-
-	BUILD_BUG_ON((unsigned long)__fix_to_virt(VSYSCALL_PAGE) !=
-		     (unsigned long)VSYSCALL_ADDR);
 }

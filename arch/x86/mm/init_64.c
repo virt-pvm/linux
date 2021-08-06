@@ -40,7 +40,7 @@
 #include <linux/uaccess.h>
 #include <asm/pgalloc.h>
 #include <asm/dma.h>
-#include <asm/fixmap.h>
+#include <asm/vsyscall.h>
 #include <asm/e820/api.h>
 #include <asm/apic.h>
 #include <asm/tlb.h>

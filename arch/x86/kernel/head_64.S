@@ -721,15 +721,15 @@ SYM_DATA_START_PAGE_ALIGNED(level2_kernel_pgt)
 SYM_DATA_END(level2_kernel_pgt)
 
 SYM_DATA_START_PAGE_ALIGNED(level2_fixmap_pgt)
-	.fill	(512 - 4 - FIXMAP_PMD_NUM),8,0
+	.fill	(512 - 5 - FIXMAP_PMD_NUM),8,0
 	pgtno = 0
 	.rept (FIXMAP_PMD_NUM)
 	.quad level1_fixmap_pgt + (pgtno << PAGE_SHIFT) - __START_KERNEL_map \
 		+ _PAGE_TABLE_NOENC;
 	pgtno = pgtno + 1
 	.endr
-	/* 6 MB reserved space + a 2MB hole */
-	.fill	4,8,0
+	/* 2MB (with 4KB vsyscall page inside) + 6 MB reserved space + a 2MB hole */
+	.fill	5,8,0
 SYM_DATA_END(level2_fixmap_pgt)
 
 SYM_DATA_START_PAGE_ALIGNED(level1_fixmap_pgt)
