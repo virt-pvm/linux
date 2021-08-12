@@ -603,6 +603,12 @@ static void xen_p4d_walk(struct mm_struct *mm, p4d_t *p4d,
 	xen_pud_walk(mm, pud, func, last, limit);
 }
 
+#ifdef CONFIG_X86_VSYSCALL_EMULATION
+#define __KERNEL_MAP_TOP	(VSYSCALL_ADDR + PAGE_SIZE)
+#else
+#define __KERNEL_MAP_TOP	FIXADDR_TOP
+#endif
+
 /*
  * (Yet another) pagetable walker.  This one is intended for pinning a
  * pagetable.  This means that it walks a pagetable and calls the
@@ -610,7 +616,7 @@ static void xen_p4d_walk(struct mm_struct *mm, p4d_t *p4d,
  * at every level.  It walks the entire pagetable, but it only bothers
  * pinning pte pages which are below limit.  In the normal case this
  * will be STACK_TOP_MAX, but at boot we need to pin up to
- * FIXADDR_TOP.
+ * __KERNEL_MAP_TOP.
  *
  * We must skip the Xen hole in the middle of the address space, just after
  * the big x86-64 virtual hole.
@@ -625,7 +631,7 @@ static void __xen_pgd_walk(struct mm_struct *mm, pgd_t *pgd,
 
 	/* The limit is the last byte to be touched */
 	limit--;
-	BUG_ON(limit >= FIXADDR_TOP);
+	BUG_ON(limit >= __KERNEL_MAP_TOP);
 
 	/*
 	 * 64-bit has a great big hole in the middle of the address
@@ -813,7 +819,7 @@ static void __init xen_after_bootmem(void)
 #ifdef CONFIG_X86_VSYSCALL_EMULATION
 	SetPagePinned(virt_to_page(level3_user_vsyscall));
 #endif
-	xen_pgd_walk(&init_mm, xen_mark_pinned, FIXADDR_TOP);
+	xen_pgd_walk(&init_mm, xen_mark_pinned, __KERNEL_MAP_TOP);
 }
 
 static void xen_unpin_page(struct mm_struct *mm, struct page *page,
