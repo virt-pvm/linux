@@ -851,6 +851,14 @@ config KVM_GUEST
 	  underlying device model, the host provides the guest with
 	  timing infrastructure such as time of day, and system time
 
+config PVM_GUEST
+	bool "PVM Guest support"
+	depends on X86_64 && KVM_GUEST
+	default n
+	help
+	  This option enables the kernel to run as a PVM guest under the PVM
+	  hypervisor.
+
 config ARCH_CPUIDLE_HALTPOLL
 	def_bool n
 	prompt "Disable host haltpoll when loading haltpoll driver"
