@@ -576,6 +576,13 @@ static inline void __set_fixmap(unsigned /* enum fixed_addresses */ idx,
 {
 	pv_ops.mmu.set_fixmap(idx, phys, flags);
 }
+
+#ifdef CONFIG_X86_VSYSCALL_EMULATION
+static inline void __set_vsyscall_page(phys_addr_t phys, pgprot_t flags)
+{
+	pv_ops.mmu.set_vsyscall_page(phys, flags);
+}
+#endif
 #endif
 
 #if defined(CONFIG_SMP) && defined(CONFIG_PARAVIRT_SPINLOCKS)

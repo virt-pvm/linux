@@ -59,6 +59,7 @@
 
 #include <asm/tlbflush.h>
 #include <asm/fixmap.h>
+#include <asm/vsyscall.h>
 #include <asm/mmu_context.h>
 #include <asm/setup.h>
 #include <asm/paravirt.h>
@@ -2036,9 +2037,6 @@ static void xen_set_fixmap(unsigned idx, phys_addr_t phys, pgprot_t prot)
 
 	switch (idx) {
 	case FIX_BTMAP_END ... FIX_BTMAP_BEGIN:
-#ifdef CONFIG_X86_VSYSCALL_EMULATION
-	case VSYSCALL_PAGE:
-#endif
 		/* All local page mappings */
 		pte = pfn_pte(phys, prot);
 		break;
@@ -2074,14 +2072,21 @@ static void xen_set_fixmap(unsigned idx, phys_addr_t phys, pgprot_t prot)
 	vaddr = __fix_to_virt(idx);
 	if (HYPERVISOR_update_va_mapping(vaddr, pte, UVMF_INVLPG))
 		BUG();
+}
 
 #ifdef CONFIG_X86_VSYSCALL_EMULATION
+static void xen_set_vsyscall_page(phys_addr_t phys, pgprot_t prot)
+{
+	pte_t pte = pfn_pte(phys >> PAGE_SHIFT, prot);
+
+	if (HYPERVISOR_update_va_mapping(VSYSCALL_ADDR, pte, UVMF_INVLPG))
+		BUG();
+
 	/* Replicate changes to map the vsyscall page into the user
 	   pagetable vsyscall mapping. */
-	if (idx == VSYSCALL_PAGE)
-		set_pte_vaddr_pud(level3_user_vsyscall, vaddr, pte);
-#endif
+	set_pte_vaddr_pud(level3_user_vsyscall, VSYSCALL_ADDR, pte);
 }
+#endif
 
 static void xen_enter_lazy_mmu(void)
 {
@@ -2189,6 +2194,9 @@ static const typeof(pv_ops) xen_mmu_ops __initconst = {
 		},
 
 		.set_fixmap = xen_set_fixmap,
+#ifdef CONFIG_X86_VSYSCALL_EMULATION
+		.set_vsyscall_page = xen_set_vsyscall_page,
+#endif
 	},
 };
 

@@ -2,6 +2,7 @@
 #ifndef _ASM_X86_VSYSCALL_H
 #define _ASM_X86_VSYSCALL_H
 
+#include <asm/pgtable.h>
 #include <linux/seqlock.h>
 #include <uapi/asm/vsyscall.h>
 
@@ -15,6 +16,18 @@ extern void set_vsyscall_pgtable_user_bits(pgd_t *root);
  */
 extern bool emulate_vsyscall(unsigned long error_code,
 			     struct pt_regs *regs, unsigned long address);
+static inline void native_set_vsyscall_page(phys_addr_t phys, pgprot_t flags)
+{
+	pgprot_val(flags) &= __default_kernel_pte_mask;
+	set_pte_vaddr(VSYSCALL_ADDR, pfn_pte(phys >> PAGE_SHIFT, flags));
+}
+
+#ifndef CONFIG_PARAVIRT_XXL
+#define __set_vsyscall_page	native_set_vsyscall_page
+#else
+#include <asm/paravirt.h>
+#endif
+
 #else
 static inline void map_vsyscall(void) {}
 static inline bool emulate_vsyscall(unsigned long error_code,
