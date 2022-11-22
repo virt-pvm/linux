@@ -2184,9 +2184,13 @@ config RELOCATABLE
 	  (CONFIG_PHYSICAL_START) is used as the minimum location.
 
 config X86_PIE
-	def_bool n
+	bool "Build a PIE kernel"
+	default n
 	depends on X86_64
 	select OBJTOOL if HAVE_OBJTOOL
+	help
+	  This builds a PIE kernel image that could be put at any
+	  virtual address.
 
 config RANDOMIZE_BASE
 	bool "Randomize the address of the kernel image (KASLR)"

@@ -161,10 +161,15 @@ else
         KBUILD_CFLAGS += -mno-red-zone
 
 ifdef CONFIG_X86_PIE
-        PIE_CFLAGS := -include $(srctree)/include/linux/hidden.h
+        PIE_CFLAGS := -fPIE -include $(srctree)/include/linux/hidden.h
         KBUILD_CFLAGS += $(PIE_CFLAGS)
-endif
+        # Relax relocation in both CFLAGS and LDFLAGS to support older compilers
+        KBUILD_CFLAGS += $(call cc-option,-Wa$(comma)-mrelax-relocations=no)
+        LDFLAGS_vmlinux += $(call ld-option,--no-relax)
+        KBUILD_LDFLAGS_MODULE += $(call ld-option,--no-relax)
+else
         KBUILD_CFLAGS += -mcmodel=kernel
+endif
         KBUILD_RUSTFLAGS += -Cno-redzone=y
         KBUILD_RUSTFLAGS += -Ccode-model=kernel
 
