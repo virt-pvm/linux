@@ -195,6 +195,10 @@ SECTIONS
 		/* rarely changed data like cpu maps */
 		READ_MOSTLY_DATA(INTERNODE_CACHE_BYTES)
 
+#ifdef CONFIG_X86_PIE
+		*(.data.rel)
+		*(.data.rel.*)
+#endif
 		/* End of data section */
 		_edata = .;
 	} :data
