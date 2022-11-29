@@ -89,6 +89,14 @@ bool arch_pc_relative_reloc(struct reloc *reloc)
 	return false;
 }
 
+bool arch_PIE_reloc(struct reloc *reloc)
+{
+	/*
+	 * PIE validation is not supported in powerpc.
+	 */
+	return false;
+}
+
 void arch_initial_func_cfi_state(struct cfi_init_state *state)
 {
 	int i;

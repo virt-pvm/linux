@@ -102,6 +102,29 @@ bool arch_pc_relative_reloc(struct reloc *reloc)
 	return false;
 }
 
+bool arch_PIE_reloc(struct reloc *reloc)
+{
+	/*
+	 * The relocation type that is allowed in
+	 * PIE binaray.
+	 */
+	switch (reloc_type(reloc)) {
+	case R_X86_64_NONE:
+	case R_X86_64_64:
+
+	case R_X86_64_PC32:
+	case R_X86_64_PC64:
+	case R_X86_64_PLT32:
+	case R_X86_64_GOTPCREL:
+		return true;
+
+	default:
+		break;
+	}
+
+	return false;
+}
+
 #define ADD_OP(op) \
 	if (!(op = calloc(1, sizeof(*op)))) \
 		return -1; \

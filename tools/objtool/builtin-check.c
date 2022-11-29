@@ -81,6 +81,7 @@ static const struct option check_options[] = {
 	OPT_BOOLEAN('t', "static-call", &opts.static_call, "annotate static calls"),
 	OPT_BOOLEAN('u', "uaccess", &opts.uaccess, "validate uaccess rules for SMAP"),
 	OPT_BOOLEAN(0  , "cfi", &opts.cfi, "annotate kernel control flow integrity (kCFI) function preambles"),
+	OPT_BOOLEAN(0, "pie", &opts.pie, "validate addressing rules for PIE"),
 	OPT_CALLBACK_OPTARG(0, "dump", NULL, NULL, "orc", "dump metadata", parse_dump),
 
 	OPT_GROUP("Options:"),
@@ -142,7 +143,8 @@ static bool opts_valid(void)
 	    opts.sls			||
 	    opts.stackval		||
 	    opts.static_call		||
-	    opts.uaccess) {
+	    opts.uaccess		||
+	    opts.pie) {
 		if (opts.dump_orc) {
 			ERROR("--dump can't be combined with other options");
 			return false;

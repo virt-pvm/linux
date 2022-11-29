@@ -8,6 +8,7 @@
 #include <inttypes.h>
 #include <sys/mman.h>
 
+#include <arch/insn.h>
 #include <objtool/builtin.h>
 #include <objtool/cfi.h>
 #include <objtool/arch.h>
@@ -42,6 +43,28 @@ struct instruction *find_insn(struct objtool_file *file,
 	hash_for_each_possible(file->insn_hash, insn, hash, sec_offset_hash(sec, offset)) {
 		if (insn->sec == sec && insn->offset == offset)
 			return insn;
+	}
+
+	return NULL;
+}
+
+static struct instruction *find_insn_containing(struct objtool_file *file,
+						struct section *sec, unsigned long offset)
+{
+	struct instruction *insn;
+	unsigned long o, start;
+
+	start = offset - (INSN_MAX_SIZE - 1);
+	if (start > offset)
+		start = 0;
+	for_offset_range(o, start, start + INSN_MAX_SIZE) {
+		hash_for_each_possible(file->insn_hash, insn, hash, sec_offset_hash(sec, o)) {
+			if (insn->sec != sec)
+				continue;
+			if (insn->offset <= offset &&
+			    insn->offset + insn->len > offset)
+				return insn;
+		}
 	}
 
 	return NULL;
@@ -4638,6 +4661,46 @@ static int disas_warned_funcs(struct objtool_file *file)
 	return 0;
 }
 
+static int is_in_pvh_code(struct instruction *insn)
+{
+	struct symbol *sym = insn->sym;
+
+	return sym && !strcmp(sym->name, "pvh_start_xen");
+}
+
+static int validate_pie(struct objtool_file *file)
+{
+	struct section *sec;
+	struct reloc *reloc;
+	struct instruction *insn;
+	int warnings = 0;
+
+	for_each_sec(file, sec) {
+		if (!sec->rsec)
+			continue;
+		if (!(sec->sh.sh_flags & SHF_ALLOC))
+			continue;
+
+		for_each_reloc(sec->rsec, reloc) {
+			if (!arch_PIE_reloc(reloc)) {
+				insn = find_insn_containing(file, sec, reloc_offset(reloc));
+				if (!insn) {
+					WARN("can't find relocate insn near %s+0x%lx",
+					     sec->name, reloc_offset(reloc));
+				} else {
+					if (is_in_pvh_code(insn))
+						break;
+					WARN("insn at %s+0x%lx is not compatible with PIE",
+					     sec->name, insn->offset);
+				}
+				warnings++;
+			}
+		}
+	}
+
+	return warnings;
+}
+
 struct insn_chunk {
 	void *addr;
 	struct insn_chunk *next;
@@ -4809,6 +4872,13 @@ int check(struct objtool_file *file)
 		ret = orc_create(file);
 		if (ret < 0)
 			goto out;
+		warnings += ret;
+	}
+
+	if (opts.pie) {
+		ret = validate_pie(file);
+		if (ret < 0)
+			return ret;
 		warnings += ret;
 	}
 

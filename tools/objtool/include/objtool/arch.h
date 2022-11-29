@@ -95,5 +95,6 @@ bool arch_is_embedded_insn(struct symbol *sym);
 int arch_rewrite_retpolines(struct objtool_file *file);
 
 bool arch_pc_relative_reloc(struct reloc *reloc);
+bool arch_PIE_reloc(struct reloc *reloc);
 
 #endif /* _ARCH_H */
