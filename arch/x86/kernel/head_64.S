@@ -76,12 +76,22 @@ SYM_CODE_START_NOALIGN(startup_64)
 	leaq	INIT_PER_CPU_VAR(fixed_percpu_data)(%rip), %rdx
 #elif defined(CONFIG_SMP)
 	movabs	$__per_cpu_load, %rdx
+#ifdef CONFIG_X86_PIE
+	movabs	$__per_cpu_start, %rax
+	subq	%rax, %rdx
+	movq	%rdx, __per_cpu_offset(%rip)
+#endif
 #else
 	xorl	%edx, %edx
 #endif
 	movl	%edx, %eax
 	shrq	$32,  %rdx
 	wrmsr
+
+#if defined(CONFIG_X86_PIE) && defined(CONFIG_SMP)
+	movq	__per_cpu_offset(%rip), %rdx
+	movq	%rdx, PER_CPU_VAR(this_cpu_off)
+#endif
 
 	call	startup_64_setup_env
 

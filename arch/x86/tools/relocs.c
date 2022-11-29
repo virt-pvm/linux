@@ -848,6 +848,7 @@ static int do_reloc64(struct section *sec, Elf_Rel *rel, ElfW(Sym) *sym,
 
 	case R_X86_64_PC32:
 	case R_X86_64_PLT32:
+#ifndef CONFIG_X86_PIE
 		/*
 		 * PC relative relocations don't need to be adjusted unless
 		 * referencing a percpu symbol.
@@ -856,6 +857,7 @@ static int do_reloc64(struct section *sec, Elf_Rel *rel, ElfW(Sym) *sym,
 		 */
 		if (is_percpu_sym(sym, symname))
 			add_reloc(&relocs32neg, offset);
+#endif
 		break;
 
 	case R_X86_64_PC64:
@@ -871,10 +873,18 @@ static int do_reloc64(struct section *sec, Elf_Rel *rel, ElfW(Sym) *sym,
 	case R_X86_64_32S:
 	case R_X86_64_64:
 		/*
-		 * References to the percpu area don't need to be adjusted.
+		 * References to the percpu area don't need to be adjusted when
+		 * CONFIG_X86_PIE is not enabled.
 		 */
-		if (is_percpu_sym(sym, symname))
+		if (is_percpu_sym(sym, symname)) {
+#if CONFIG_X86_PIE
+			if (r_type != R_X86_64_64)
+				die("Invalid absolute reference against per-CPU symbol %s\n",
+				    symname);
+			add_reloc(&relocs64, offset);
+#endif
 			break;
+		}
 
 		if (shn_abs) {
 			/*
@@ -1044,7 +1054,8 @@ static int cmp_relocs(const void *va, const void *vb)
 
 static void sort_relocs(struct relocs *r)
 {
-	qsort(r->offset, r->count, sizeof(r->offset[0]), cmp_relocs);
+	if (r->count)
+		qsort(r->offset, r->count, sizeof(r->offset[0]), cmp_relocs);
 }
 
 static int write32(uint32_t v, FILE *f)
