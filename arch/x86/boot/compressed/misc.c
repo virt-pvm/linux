@@ -484,8 +484,10 @@ asmlinkage __visible void *extract_kernel(void *rmode, unsigned char *output)
 #ifdef CONFIG_X86_64
 	if (heap > 0x3fffffffffffUL)
 		error("Destination address too large");
+#ifndef CONFIG_X86_PIE
 	if (virt_addr + needed_size > KERNEL_IMAGE_SIZE)
 		error("Destination virtual address is beyond the kernel mapping area");
+#endif
 #else
 	if (heap > ((-__PAGE_OFFSET-(128<<20)-1) & 0x7fffffff))
 		error("Destination address too large");

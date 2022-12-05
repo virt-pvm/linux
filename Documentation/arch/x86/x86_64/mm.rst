@@ -149,6 +149,10 @@ Note that if CONFIG_RANDOMIZE_MEMORY is enabled, the direct mapping of all
 physical memory, vmalloc/ioremap space and virtual memory map are randomized.
 Their order is preserved but their base will be offset early at boot time.
 
+Note that if EXTENDED_RANDOMIZE_BASE is enabled, the kernel image area
+including kernel image, module area and fixmap area is randomized as a whole
+in top 512G of address space.
+
 Be very careful vs. KASLR when changing anything here. The KASLR address
 range must not overlap with anything except the KASAN shadow area, which is
 correct as KASAN disables KASLR.
