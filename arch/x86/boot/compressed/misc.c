@@ -210,8 +210,10 @@ static void handle_relocations(void *output, unsigned long output_len,
 	 * needed if KASLR has chosen a different starting address offset
 	 * from __START_KERNEL_map.
 	 */
-	if (IS_ENABLED(CONFIG_X86_64))
+	if (IS_ENABLED(CONFIG_X86_64)) {
 		delta = virt_addr - LOAD_PHYSICAL_ADDR;
+		delta += pie_randomize();
+	}
 
 	if (!delta) {
 		debug_putstr("No relocation needed... ");

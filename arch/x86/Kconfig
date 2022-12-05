@@ -2227,6 +2227,17 @@ config RANDOMIZE_BASE
 
 	  If unsure, say Y.
 
+config EXTENDED_RANDOMIZE_BASE
+	bool "Randomize the address of the kernel image (PIE)"
+	default y
+	depends on X86_PIE && RANDOMIZE_BASE
+	help
+	  This packs kernel image, module area and fixmap area as a
+	  whole, and allows it to be randomized in top 512G of virtual
+	  address space when PIE is enabled.
+
+	  If unsure, say Y.
+
 # Relocation on x86 needs some additional build support
 config X86_NEED_RELOCS
 	def_bool y

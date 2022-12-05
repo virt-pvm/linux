@@ -887,3 +887,58 @@ void choose_random_location(unsigned long input,
 		random_addr = find_random_virt_addr(LOAD_PHYSICAL_ADDR, output_size);
 	*virt_addr = random_addr;
 }
+
+#ifdef CONFIG_EXTENDED_RANDOMIZE_BASE
+struct kernel_image_slot {
+	unsigned long start;
+	unsigned long end;
+	unsigned long pud_slots;
+};
+
+/*
+ * Currently, there are two unused hole in top 512G, see
+ * Documentation/x86/x86_64/mm.rst, use the hole as the kernel image base.
+ */
+struct kernel_image_slot available_slots[] = {
+	{
+		.start = 0xffffff8000000000UL,
+		.end = 0xffffffeeffffffffUL,
+	},
+	{
+		.start = 0xffffffff00000000UL,
+		.end = 0xffffffffffffffffUL,
+	},
+};
+
+unsigned long pie_randomize(void)
+{
+	unsigned long total, slot;
+	int i;
+
+	if (cmdline_find_option_bool("nokaslr"))
+		return 0;
+
+	total = 0;
+	for (i = 0; i < ARRAY_SIZE(available_slots); i++) {
+		available_slots[i].pud_slots = (available_slots[i].end -
+						available_slots[i].start + 1UL) /
+						PUD_SIZE - 1UL;
+		total += available_slots[i].pud_slots;
+	}
+
+	slot = kaslr_get_random_long("PIE slot") % total;
+	for (i = 0; i < ARRAY_SIZE(available_slots); i++) {
+		if (slot < available_slots[i].pud_slots)
+			break;
+
+		slot -= available_slots[i].pud_slots;
+	}
+
+	if (i == ARRAY_SIZE(available_slots) || slot >= available_slots[i].pud_slots) {
+		warn("PIE randomize disabled: available slots are bad!");
+		return 0;
+	}
+
+	return (available_slots[i].start + slot * PUD_SIZE) - __START_KERNEL_map;
+}
+#endif

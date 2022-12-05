@@ -112,6 +112,15 @@ static inline void choose_random_location(unsigned long input,
 }
 #endif
 
+#ifdef CONFIG_EXTENDED_RANDOMIZE_BASE
+unsigned long pie_randomize(void);
+#else
+static inline unsigned long pie_randomize(void)
+{
+	return 0;
+}
+#endif
+
 /* cpuflags.c */
 bool has_cpuflag(int flag);
 
