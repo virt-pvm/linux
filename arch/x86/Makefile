@@ -159,6 +159,11 @@ else
         KBUILD_RUSTFLAGS += $(rustflags-y)
 
         KBUILD_CFLAGS += -mno-red-zone
+
+ifdef CONFIG_X86_PIE
+        PIE_CFLAGS := -include $(srctree)/include/linux/hidden.h
+        KBUILD_CFLAGS += $(PIE_CFLAGS)
+endif
         KBUILD_CFLAGS += -mcmodel=kernel
         KBUILD_RUSTFLAGS += -Cno-redzone=y
         KBUILD_RUSTFLAGS += -Ccode-model=kernel
@@ -176,6 +181,8 @@ ifeq ($(CONFIG_STACKPROTECTOR),y)
 		endif
 	endif
 endif
+
+export PIE_CFLAGS
 
 #
 # If the function graph tracer is used with mcount instead of fentry,
