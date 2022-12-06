@@ -19,6 +19,7 @@
 #include <linux/jump_label.h>
 #include <linux/random.h>
 #include <linux/memory.h>
+#include <linux/sort.h>
 
 #include <asm/text-patching.h>
 #include <asm/page.h>
@@ -61,6 +62,122 @@ static unsigned long int get_module_load_offset(void)
 #else
 static unsigned long int get_module_load_offset(void)
 {
+	return 0;
+}
+#endif
+
+#ifdef CONFIG_X86_PIE
+static u64 module_emit_got_entry(struct module *mod, Elf_Shdr *sechdrs, u64 val)
+{
+	struct mod_section *got_sec = &mod->arch.got;
+	unsigned int i = got_sec->num_entries;
+	u64 *got = (u64 *)sechdrs[got_sec->shndx].sh_addr;
+
+	/*
+	 * Check if the entry we just created is a duplicate. Given that the
+	 * relocations are sorted, this will be the last entry we allocated.
+	 * (if one exists).
+	 */
+	if (i > 0 && val == got[i - 1])
+		return (u64)&got[i - 1];
+
+	got[i] = val;
+	got_sec->num_entries++;
+	if (WARN_ON(got_sec->num_entries > got_sec->max_entries))
+		return 0;
+
+	return (u64)&got[i];
+}
+
+#define cmp_3way(a, b)	((a) < (b) ? -1 : (a) > (b))
+
+static int cmp_rela(const void *a, const void *b)
+{
+	const Elf64_Rela *x = a, *y = b;
+	int i;
+
+	/* sort by type, symbol index and addend */
+	i = cmp_3way(ELF64_R_TYPE(x->r_info), ELF64_R_TYPE(y->r_info));
+	if (i == 0)
+		i = cmp_3way(ELF64_R_SYM(x->r_info), ELF64_R_SYM(y->r_info));
+	if (i == 0)
+		i = cmp_3way(x->r_addend, y->r_addend);
+	return i;
+}
+
+static bool duplicate_rel(const Elf64_Rela *rela, unsigned int num)
+{
+	/*
+	 * Entries are sorted by type, symbol index and addend. That means
+	 * that, if a duplicate entry exists, it must be in the preceding
+	 * slot.
+	 */
+	return num > 0 && cmp_rela(rela + num, rela + num - 1) == 0;
+}
+
+static unsigned int count_gots(Elf64_Rela *rela, unsigned int num)
+{
+	unsigned int i, ret = 0;
+
+	for (i = 0; i < num; i++) {
+		switch (ELF64_R_TYPE(rela[i].r_info)) {
+		case R_X86_64_GOTPCREL:
+			if (!duplicate_rel(rela, i))
+				ret++;
+			break;
+		}
+	}
+
+	return ret;
+}
+
+int module_frob_arch_sections(Elf_Ehdr *ehdr, Elf_Shdr *sechdrs,
+			      char *secstrings, struct module *mod)
+{
+	unsigned int i, gots = 0;
+	Elf64_Sym *syms = NULL;
+	Elf_Shdr *got_sec;
+
+	/*
+	 * Find the empty .got section so we can expand it to store the GOT
+	 * entries. Record the symtab address as well.
+	 */
+	for (i = 0; i < ehdr->e_shnum; i++) {
+		if (!strcmp(secstrings + sechdrs[i].sh_name, ".got"))
+			mod->arch.got.shndx = i;
+		else if (sechdrs[i].sh_type == SHT_SYMTAB)
+			syms = (Elf64_Sym *)sechdrs[i].sh_addr;
+	}
+
+	if (!mod->arch.got.shndx) {
+		pr_err("%s: module GOT section(s) missing\n", mod->name);
+		return -ENOEXEC;
+	}
+	if (!syms) {
+		pr_err("%s: module symtab section missing\n", mod->name);
+		return -ENOEXEC;
+	}
+
+	for (i = 0; i < ehdr->e_shnum; i++) {
+		Elf64_Rela *rela = (void *)ehdr + sechdrs[i].sh_offset;
+		unsigned int num = sechdrs[i].sh_size / sizeof(Elf64_Rela);
+
+		if (sechdrs[i].sh_type != SHT_RELA)
+			continue;
+
+		sort(rela, num, sizeof(Elf64_Rela), cmp_rela, NULL);
+
+		gots += count_gots(rela, num);
+	}
+
+	got_sec = sechdrs + mod->arch.got.shndx;
+	got_sec->sh_type = SHT_NOBITS;
+	got_sec->sh_flags = SHF_ALLOC;
+	got_sec->sh_addralign = L1_CACHE_BYTES;
+	got_sec->sh_size = (gots + 1) * sizeof(u64);
+	mod->arch.got.num_entries = 0;
+	mod->arch.got.max_entries = gots;
+
 	return 0;
 }
 #endif
@@ -171,6 +288,7 @@ static int __write_relocate_add(Elf64_Shdr *sechdrs,
 		case R_X86_64_64:
 			size = 8;
 			break;
+#ifndef CONFIG_X86_PIE
 		case R_X86_64_32:
 			if (val != *(u32 *)&val)
 				goto overflow;
@@ -181,6 +299,14 @@ static int __write_relocate_add(Elf64_Shdr *sechdrs,
 				goto overflow;
 			size = 4;
 			break;
+#else
+		case R_X86_64_GOTPCREL:
+			val = module_emit_got_entry(me, sechdrs, sym->st_value);
+			if (!val)
+				return -ENOEXEC;
+			val += rel[i].r_addend;
+			fallthrough;
+#endif
 		case R_X86_64_PC32:
 		case R_X86_64_PLT32:
 			val -= (u64)loc;
@@ -214,12 +340,14 @@ static int __write_relocate_add(Elf64_Shdr *sechdrs,
 	}
 	return 0;
 
+#ifndef CONFIG_X86_PIE
 overflow:
 	pr_err("overflow in relocation type %d val %Lx\n",
 	       (int)ELF64_R_TYPE(rel[i].r_info), val);
 	pr_err("`%s' likely not compiled with -mcmodel=kernel\n",
 	       me->name);
 	return -ENOEXEC;
+#endif
 }
 
 static int write_relocate_add(Elf64_Shdr *sechdrs,
