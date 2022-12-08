@@ -2180,8 +2180,23 @@ populate_extable:
 			}
 			if (!imm32)
 				return -EINVAL;
-			ip += x86_call_depth_emit_accounting(&prog, func, ip);
-			if (emit_call(&prog, func, ip))
+
+			/*
+			 * If image is NULL, ip is in bottom address and func
+			 * is in kernel image address (top 2G), so the offset
+			 * is valid. However, PIE kernel image could be below
+			 * top 2G, then the offset would be out of range. Since
+			 * the length of PC-relative call(0xe8) is fixed, so it's
+			 * pointless to calculate the offset until the last pass.
+			 * Use 1 as the dummy offset if image is NULL.
+			 */
+			if (image) {
+				ip += x86_call_depth_emit_accounting(&prog, func, ip);
+				err = emit_call(&prog, func, ip);
+			} else {
+				err = emit_call(&prog, (void *)(X86_PATCH_SIZE + 1UL), 0);
+			}
+			if (err)
 				return -EINVAL;
 			break;
 		}
