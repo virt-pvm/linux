@@ -108,6 +108,14 @@ SYM_CODE_START_LOCAL(pvh_start_xen)
 #endif
 	wrmsr
 
+#ifdef CONFIG_X86_PIE
+	movabs  $2f, %rax
+	ANNOTATE_RETPOLINE_SAFE
+	jmp *%rax
+2:
+	UNWIND_HINT_END_OF_STACK
+	ANNOTATE_NOENDBR // above
+#endif
 	call xen_prepare_pvh
 
 	/* startup_64 expects boot_params in %rsi. */
@@ -149,9 +157,15 @@ SYM_CODE_END(pvh_start_xen)
 	.section ".init.data","aw"
 	.balign 8
 SYM_DATA_START_LOCAL(gdt)
+	/*
+	 * Use an ASM_PTR (quad on x64) for _pa(gdt_start) because PIE requires
+	 * a pointer size storage value before applying the relocation. On
+	 * 32-bit _ASM_PTR will be a long which is aligned the space needed for
+	 * relocation.
+	 */
 	.word gdt_end - gdt_start
-	.long _pa(gdt_start)
-	.word 0
+	_ASM_PTR _pa(gdt_start)
+	.balign 8
 SYM_DATA_END(gdt)
 SYM_DATA_START_LOCAL(gdt_start)
 	.quad 0x0000000000000000            /* NULL descriptor */
