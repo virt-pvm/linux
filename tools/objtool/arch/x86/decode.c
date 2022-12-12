@@ -770,15 +770,21 @@ void arch_initial_func_cfi_state(struct cfi_init_state *state)
 
 const char *arch_nop_insn(int len)
 {
-	static const char nops[5][5] = {
+	static const char nops[6][6] = {
 		{ BYTES_NOP1 },
 		{ BYTES_NOP2 },
 		{ BYTES_NOP3 },
 		{ BYTES_NOP4 },
 		{ BYTES_NOP5 },
+		/*
+		 * For PIE kernel, use a 5-byte nop
+		 * and 1-byte nop to keep the frace
+		 * hooking algorithm working correct.
+		 */
+		{ BYTES_NOP5, BYTES_NOP1 },
 	};
 
-	if (len < 1 || len > 5) {
+	if (len < 1 || len > 6) {
 		WARN("invalid NOP size: %d\n", len);
 		return NULL;
 	}

@@ -1758,6 +1758,40 @@ static int add_call_destinations(struct objtool_file *file)
 	return 0;
 }
 
+static int add_indirect_mcount_calls(struct objtool_file *file)
+{
+	struct instruction *insn;
+	struct reloc *reloc;
+
+	if (!list_empty(&file->mcount_loc_list))
+		return 0;
+
+	for_each_insn(file, insn) {
+		if (insn->type != INSN_CALL_DYNAMIC)
+			continue;
+
+		reloc = insn_reloc(file, insn);
+		if (!reloc)
+			continue;
+		if (!reloc->sym->fentry)
+			continue;
+
+		/*
+		 * __fentry__() is an indirect call even in RETPOLINE builiding
+		 * when X86_PIE is enabled. However, it would be patched as NOP
+		 * later, so treat it as retpoline safe as a hack here. Also
+		 * treat it as a direct call, otherwise, it would be treat as a
+		 * jump to jump table in insn_jump_table(), because _jump_table
+		 * and _call_dest share the same memory.
+		 */
+		insn->type = INSN_CALL;
+		insn->retpoline_safe = true;
+		add_call_dest(file, insn, reloc->sym, false);
+	}
+
+	return 0;
+}
+
 /*
  * The .alternatives section requires some extra special care over and above
  * other special sections because alternatives are patched in place.
@@ -2657,6 +2691,9 @@ static int decode_sections(struct objtool_file *file)
 	ret = add_call_destinations(file);
 	if (ret)
 		return ret;
+
+	if (opts.pie)
+		add_indirect_mcount_calls(file);
 
 	/*
 	 * Must be after add_call_destinations() such that it can override
