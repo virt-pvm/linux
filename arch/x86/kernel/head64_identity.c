@@ -315,3 +315,73 @@ void __head startup_64_setup_env(void)
 
 	startup_64_load_idt();
 }
+
+#ifdef CONFIG_RELOCATABLE_UNCOMPRESSED_KERNEL
+extern u8 __relocation_end[];
+
+static bool __head is_in_pvh_pgtable(unsigned long ptr)
+{
+#ifdef CONFIG_PVH
+	if (ptr >= (unsigned long)init_top_pgt &&
+	    ptr < (unsigned long)init_top_pgt + PAGE_SIZE)
+		return true;
+	if (ptr >= (unsigned long)level3_ident_pgt &&
+	    ptr < (unsigned long)level3_ident_pgt + PAGE_SIZE)
+		return true;
+#endif
+	return false;
+}
+
+void __head __relocate_kernel(unsigned long physbase, unsigned long virtbase)
+{
+	int *reloc = (int *)__relocation_end;
+	unsigned long ptr;
+	unsigned long delta = virtbase - __START_KERNEL_map;
+	unsigned long map = physbase - __START_KERNEL;
+	long extended;
+
+	/*
+	 * Relocation had happended in bootloader,
+	 * don't do it again.
+	 */
+	if (SYM_ABS_VA(_text) != __START_KERNEL)
+		return;
+
+	if (!delta)
+		return;
+
+	/*
+	 * Format is:
+	 *
+	 * kernel bits...
+	 * 0 - zero terminator for 64 bit relocations
+	 * 64 bit relocation repeated
+	 * 0 - zero terminator for inverse 32 bit relocations
+	 * 32 bit inverse relocation repeated
+	 * 0 - zero terminator for 32 bit relocations
+	 * 32 bit relocation repeated
+	 *
+	 * So we work backwards from the end of .data.relocs section, see
+	 * handle_relocations() in arch/x86/boot/compressed/misc.c.
+	 */
+	while (*--reloc) {
+		extended = *reloc;
+		ptr = (unsigned long)(extended + map);
+		*(uint32_t *)ptr += delta;
+	}
+
+	while (*--reloc) {
+		extended = *reloc;
+		ptr = (unsigned long)(extended + map);
+		*(int32_t *)ptr -= delta;
+	}
+
+	while (*--reloc) {
+		extended = *reloc;
+		ptr = (unsigned long)(extended + map);
+		if (is_in_pvh_pgtable(ptr))
+			continue;
+		*(uint64_t *)ptr += delta;
+	}
+}
+#endif

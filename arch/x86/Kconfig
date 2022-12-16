@@ -2183,6 +2183,26 @@ config RELOCATABLE
 	  it has been loaded at and the compile time physical address
 	  (CONFIG_PHYSICAL_START) is used as the minimum location.
 
+config RELOCATABLE_UNCOMPRESSED_KERNEL
+	bool
+	depends on RELOCATABLE
+	help
+	  A table of relocation data will be appended to the uncompressed
+	  kernel binary and parsed at boot to fix up the relocated kernel.
+
+config RELOCATION_TABLE_SIZE
+	hex "Relocation table size"
+	depends on RELOCATABLE_UNCOMPRESSED_KERNEL
+	range 0x0 0x01000000
+	default "0x00200000"
+	help
+	  This option allows the amount of space reserved for the table to be
+	  adjusted, although the default of 1Mb should be ok in most cases.
+
+	  The build will fail and a valid size suggested if this is too small.
+
+	  If unsure, leave at the default value.
+
 config X86_PIE
 	bool "Build a PIE kernel"
 	default n
