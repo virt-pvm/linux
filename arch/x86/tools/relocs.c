@@ -125,13 +125,13 @@ static int is_reloc(enum symtype type, const char *sym_name)
 		!regexec(&sym_regex_c[type], sym_name, 0, NULL, 0);
 }
 
-static void regex_init(int use_real_mode)
+static void regex_init(void)
 {
         char errbuf[128];
         int err;
 	int i;
 
-	if (use_real_mode)
+	if (opts.use_real_mode)
 		sym_regex = sym_regex_realmode;
 	else
 		sym_regex = sym_regex_kernel;
@@ -1164,7 +1164,7 @@ static int write32_as_text(uint32_t v, FILE *f)
 	return fprintf(f, "\t.long 0x%08"PRIx32"\n", v) > 0 ? 0 : -1;
 }
 
-static void emit_relocs(int as_text, int use_real_mode)
+static void emit_relocs(void)
 {
 	int i;
 	int (*write_reloc)(uint32_t, FILE *) = write32;
@@ -1172,12 +1172,12 @@ static void emit_relocs(int as_text, int use_real_mode)
 			const char *symname);
 
 #if ELF_BITS == 64
-	if (!use_real_mode)
+	if (!opts.use_real_mode)
 		do_reloc = do_reloc64;
 	else
 		die("--realmode not valid for a 64-bit ELF file");
 #else
-	if (!use_real_mode)
+	if (!opts.use_real_mode)
 		do_reloc = do_reloc32;
 	else
 		do_reloc = do_reloc_real;
@@ -1186,7 +1186,7 @@ static void emit_relocs(int as_text, int use_real_mode)
 	/* Collect up the relocations */
 	walk_relocs(do_reloc);
 
-	if (relocs16.count && !use_real_mode)
+	if (relocs16.count && !opts.use_real_mode)
 		die("Segment relocations found but --realmode not specified\n");
 
 	/* Order the relocations for more efficient processing */
@@ -1199,7 +1199,7 @@ static void emit_relocs(int as_text, int use_real_mode)
 #endif
 
 	/* Print the relocations */
-	if (as_text) {
+	if (opts.as_text) {
 		/* Print the relocations in a form suitable that
 		 * gas will like.
 		 */
@@ -1208,7 +1208,7 @@ static void emit_relocs(int as_text, int use_real_mode)
 		write_reloc = write32_as_text;
 	}
 
-	if (use_real_mode) {
+	if (opts.use_real_mode) {
 		write_reloc(relocs16.count, stdout);
 		for (i = 0; i < relocs16.count; i++)
 			write_reloc(relocs16.offset[i], stdout);
@@ -1271,11 +1271,9 @@ static void print_reloc_info(void)
 # define process process_32
 #endif
 
-void process(FILE *fp, int use_real_mode, int as_text,
-	     int show_absolute_syms, int show_absolute_relocs,
-	     int show_reloc_info)
+void process(FILE *fp)
 {
-	regex_init(use_real_mode);
+	regex_init();
 	read_ehdr(fp);
 	read_shdrs(fp);
 	read_strtabs(fp);
@@ -1284,17 +1282,17 @@ void process(FILE *fp, int use_real_mode, int as_text,
 	read_got(fp);
 	if (ELF_BITS == 64)
 		percpu_init();
-	if (show_absolute_syms) {
+	if (opts.show_absolute_syms) {
 		print_absolute_symbols();
 		return;
 	}
-	if (show_absolute_relocs) {
+	if (opts.show_absolute_relocs) {
 		print_absolute_relocs();
 		return;
 	}
-	if (show_reloc_info) {
+	if (opts.show_reloc_info) {
 		print_reloc_info();
 		return;
 	}
-	emit_relocs(as_text, use_real_mode);
+	emit_relocs();
 }

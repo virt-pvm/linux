@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "relocs.h"
 
+struct opts opts;
+
 void die(char *fmt, ...)
 {
 	va_list ap;
@@ -18,40 +20,33 @@ static void usage(void)
 
 int main(int argc, char **argv)
 {
-	int show_absolute_syms, show_absolute_relocs, show_reloc_info;
-	int as_text, use_real_mode;
 	const char *fname;
 	FILE *fp;
 	int i;
 	unsigned char e_ident[EI_NIDENT];
 
-	show_absolute_syms = 0;
-	show_absolute_relocs = 0;
-	show_reloc_info = 0;
-	as_text = 0;
-	use_real_mode = 0;
 	fname = NULL;
 	for (i = 1; i < argc; i++) {
 		char *arg = argv[i];
 		if (*arg == '-') {
 			if (strcmp(arg, "--abs-syms") == 0) {
-				show_absolute_syms = 1;
+				opts.show_absolute_syms = true;
 				continue;
 			}
 			if (strcmp(arg, "--abs-relocs") == 0) {
-				show_absolute_relocs = 1;
+				opts.show_absolute_relocs = true;
 				continue;
 			}
 			if (strcmp(arg, "--reloc-info") == 0) {
-				show_reloc_info = 1;
+				opts.show_reloc_info = true;
 				continue;
 			}
 			if (strcmp(arg, "--text") == 0) {
-				as_text = 1;
+				opts.as_text = true;
 				continue;
 			}
 			if (strcmp(arg, "--realmode") == 0) {
-				use_real_mode = 1;
+				opts.use_real_mode = true;
 				continue;
 			}
 		}
@@ -73,13 +68,9 @@ int main(int argc, char **argv)
 	}
 	rewind(fp);
 	if (e_ident[EI_CLASS] == ELFCLASS64)
-		process_64(fp, use_real_mode, as_text,
-			   show_absolute_syms, show_absolute_relocs,
-			   show_reloc_info);
+		process_64(fp);
 	else
-		process_32(fp, use_real_mode, as_text,
-			   show_absolute_syms, show_absolute_relocs,
-			   show_reloc_info);
+		process_32(fp);
 	fclose(fp);
 	return 0;
 }

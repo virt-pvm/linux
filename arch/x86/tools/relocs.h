@@ -6,6 +6,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <inttypes.h>
 #include <string.h>
 #include <errno.h>
@@ -30,10 +31,16 @@ enum symtype {
 	S_NSYMTYPES
 };
 
-void process_32(FILE *fp, int use_real_mode, int as_text,
-		int show_absolute_syms, int show_absolute_relocs,
-		int show_reloc_info);
-void process_64(FILE *fp, int use_real_mode, int as_text,
-		int show_absolute_syms, int show_absolute_relocs,
-		int show_reloc_info);
+struct opts {
+	bool use_real_mode;
+	bool as_text;
+	bool show_absolute_syms;
+	bool show_absolute_relocs;
+	bool show_reloc_info;
+};
+
+extern struct opts opts;
+
+void process_32(FILE *fp);
+void process_64(FILE *fp);
 #endif /* RELOCS_H */
