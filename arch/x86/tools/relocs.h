@@ -37,6 +37,7 @@ struct opts {
 	bool show_absolute_syms;
 	bool show_absolute_relocs;
 	bool show_reloc_info;
+	bool keep_relocs;
 };
 
 extern struct opts opts;

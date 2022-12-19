@@ -14,7 +14,7 @@ void die(char *fmt, ...)
 
 static void usage(void)
 {
-	die("relocs [--abs-syms|--abs-relocs|--reloc-info|--text|--realmode]" \
+	die("relocs [--abs-syms|--abs-relocs|--reloc-info|--text|--realmode|--keep]" \
 	    " vmlinux\n");
 }
 
@@ -49,6 +49,10 @@ int main(int argc, char **argv)
 				opts.use_real_mode = true;
 				continue;
 			}
+			if (strcmp(arg, "--keep") == 0) {
+				opts.keep_relocs = true;
+				continue;
+			}
 		}
 		else if (!fname) {
 			fname = arg;
@@ -59,7 +63,10 @@ int main(int argc, char **argv)
 	if (!fname) {
 		usage();
 	}
-	fp = fopen(fname, "r");
+	if (opts.keep_relocs)
+		fp = fopen(fname, "r+");
+	else
+		fp = fopen(fname, "r");
 	if (!fp) {
 		die("Cannot open %s: %s\n", fname, strerror(errno));
 	}

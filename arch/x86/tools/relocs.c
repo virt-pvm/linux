@@ -912,6 +912,17 @@ static int is_percpu_sym(ElfW(Sym) *sym, const char *symname)
 		strncmp(symname, "init_per_cpu_", 13);
 }
 
+static struct section *sec_lookup(const char *name)
+{
+	int i;
+
+	for (i = 0; i < shnum; i++) {
+		if (!strcmp(sec_name(i), name))
+			return &secs[i];
+	}
+
+	return NULL;
+}
 
 static int do_reloc64(struct section *sec, Elf_Rel *rel, ElfW(Sym) *sym,
 		      const char *symname)
@@ -1164,12 +1175,13 @@ static int write32_as_text(uint32_t v, FILE *f)
 	return fprintf(f, "\t.long 0x%08"PRIx32"\n", v) > 0 ? 0 : -1;
 }
 
-static void emit_relocs(void)
+static void emit_relocs(FILE *f)
 {
 	int i;
 	int (*write_reloc)(uint32_t, FILE *) = write32;
 	int (*do_reloc)(struct section *sec, Elf_Rel *rel, Elf_Sym *sym,
 			const char *symname);
+	FILE *outf = stdout;
 
 #if ELF_BITS == 64
 	if (!opts.use_real_mode)
@@ -1208,37 +1220,63 @@ static void emit_relocs(void)
 		write_reloc = write32_as_text;
 	}
 
-	if (opts.use_real_mode) {
-		write_reloc(relocs16.count, stdout);
-		for (i = 0; i < relocs16.count; i++)
-			write_reloc(relocs16.offset[i], stdout);
+#if ELF_BITS == 64
+	if (opts.keep_relocs) {
+		struct section *sec_reloc;
+		uint32_t size_needed;
+		unsigned long offset;
 
-		write_reloc(relocs32.count, stdout);
+		sec_reloc = sec_lookup(".data.reloc");
+		if (!sec_reloc)
+			die("Could not find relocation data section\n");
+
+		size_needed = (3 + relocs64.count + relocs32neg.count +
+			      relocs32.count) * sizeof(uint32_t);
+		if (size_needed > sec_reloc->shdr.sh_size)
+			die("Relocations overflow available space!\n" \
+			    "Please adjust CONFIG_RELOCATION_TABLE_SIZE" \
+			    "to at least 0x%08x\n", (size_needed + 0x1000) & ~0xFFF);
+
+		offset = sec_reloc->shdr.sh_offset + sec_reloc->shdr.sh_size -
+			 size_needed;
+		if (fseek(f, offset, SEEK_SET) < 0)
+			die("Seek to %ld failed: %s\n", offset, strerror(errno));
+
+		outf = f;
+	}
+#endif
+
+	if (opts.use_real_mode) {
+		write_reloc(relocs16.count, outf);
+		for (i = 0; i < relocs16.count; i++)
+			write_reloc(relocs16.offset[i], outf);
+
+		write_reloc(relocs32.count, outf);
 		for (i = 0; i < relocs32.count; i++)
-			write_reloc(relocs32.offset[i], stdout);
+			write_reloc(relocs32.offset[i], outf);
 	} else {
 #if ELF_BITS == 64
 		/* Print a stop */
-		write_reloc(0, stdout);
+		write_reloc(0, outf);
 
 		/* Now print each relocation */
 		for (i = 0; i < relocs64.count; i++)
-			write_reloc(relocs64.offset[i], stdout);
+			write_reloc(relocs64.offset[i], outf);
 
 		/* Print a stop */
-		write_reloc(0, stdout);
+		write_reloc(0, outf);
 
 		/* Now print each inverse 32-bit relocation */
 		for (i = 0; i < relocs32neg.count; i++)
-			write_reloc(relocs32neg.offset[i], stdout);
+			write_reloc(relocs32neg.offset[i], outf);
 #endif
 
 		/* Print a stop */
-		write_reloc(0, stdout);
+		write_reloc(0, outf);
 
 		/* Now print each relocation */
 		for (i = 0; i < relocs32.count; i++)
-			write_reloc(relocs32.offset[i], stdout);
+			write_reloc(relocs32.offset[i], outf);
 	}
 }
 
@@ -1294,5 +1332,5 @@ void process(FILE *fp)
 		print_reloc_info();
 		return;
 	}
-	emit_relocs();
+	emit_relocs(fp);
 }
