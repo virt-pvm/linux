@@ -51,15 +51,19 @@ SYM_CODE_START(startup_xen)
 
 	leaq	(__end_init_task - PTREGS_SIZE)(%rip), %rsp
 
-	/* Set up %gs.
-	 *
-	 * The base of %gs always points to fixed_percpu_data.  If the
-	 * stack protector canary is enabled, it is located at %gs:40.
+	/*
+	 * Set up GS base.
 	 * Note that, on SMP, the boot cpu uses init data section until
 	 * the per cpu areas are set up.
 	 */
 	movl	$MSR_GS_BASE,%ecx
-	movq	$INIT_PER_CPU_VAR(fixed_percpu_data),%rax
+#if defined(CONFIG_STACKPROTECTOR_FIXED)
+	leaq	INIT_PER_CPU_VAR(fixed_percpu_data)(%rip), %rax
+#elif defined(CONFIG_SMP)
+	movabs	$__per_cpu_load, %rax
+#else
+	xorl	%eax, %eax
+#endif
 	cdq
 	wrmsr
 

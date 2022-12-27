@@ -72,7 +72,13 @@ SYM_CODE_START_NOALIGN(startup_64)
 
 	/* Setup GSBASE to allow stack canary access for C code */
 	movl	$MSR_GS_BASE, %ecx
+#if defined(CONFIG_STACKPROTECTOR_FIXED)
 	leaq	INIT_PER_CPU_VAR(fixed_percpu_data)(%rip), %rdx
+#elif defined(CONFIG_SMP)
+	movabs	$__per_cpu_load, %rdx
+#else
+	xorl	%edx, %edx
+#endif
 	movl	%edx, %eax
 	shrq	$32,  %rdx
 	wrmsr
@@ -348,16 +354,14 @@ SYM_INNER_LABEL(secondary_startup_64_no_verify, SYM_L_GLOBAL)
 	movl %eax,%fs
 	movl %eax,%gs
 
-	/* Set up %gs.
-	 *
-	 * The base of %gs always points to fixed_percpu_data. If the
-	 * stack protector canary is enabled, it is located at %gs:40.
+	/*
+	 * Set up GS base.
 	 * Note that, on SMP, the boot cpu uses init data section until
 	 * the per cpu areas are set up.
 	 */
 	movl	$MSR_GS_BASE,%ecx
-#ifndef CONFIG_SMP
-	leaq	INIT_PER_CPU_VAR(fixed_percpu_data)(%rip), %rdx
+#if !defined(CONFIG_SMP) && defined(CONFIG_STACKPROTECTOR_FIXED)
+	leaq	__per_cpu_load(%rip), %rdx
 #endif
 	movl	%edx, %eax
 	shrq	$32, %rdx

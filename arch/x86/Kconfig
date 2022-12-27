@@ -417,6 +417,24 @@ config CC_HAS_SANE_STACKPROTECTOR
 	  the compiler produces broken code or if it does not let us control
 	  the segment on 32-bit kernels.
 
+config CC_HAS_CUSTOMIZED_STACKPROTECTOR
+	bool
+	# Although Clang supports the -mstack-protector-guard-reg option, it
+	# would use GOT indirection to reference __stack_chk_guard even with
+	# the -fdirect-access-external-data option.
+	# https://github.com/llvm/llvm-project/issues/60116
+	#
+	# Furthermore, if there is a definition or reference to
+	# "__stack_chk_guard" in the source file, Clang may generate the wrong
+	# instruction.
+	# https://github.com/ClangBuiltLinux/linux/issues/1854
+	default $(success,$(srctree)/scripts/clang-x86_64-has-customized-stack-protector.sh $(CC) $(CLANG_FLAGS))
+
+config STACKPROTECTOR_FIXED
+	bool
+	depends on X86_64 && STACKPROTECTOR
+	default !CC_HAS_CUSTOMIZED_STACKPROTECTOR
+
 menu "Processor type and features"
 
 config SMP
