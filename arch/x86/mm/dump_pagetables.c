@@ -17,6 +17,7 @@
 #include <linux/highmem.h>
 #include <linux/pci.h>
 #include <linux/ptdump.h>
+#include <linux/sort.h>
 
 #include <asm/e820/types.h>
 
@@ -444,6 +445,27 @@ bool ptdump_walk_pgd_level_checkwx(void)
 	return ptdump_walk_pgd_level_core(NULL, &init_mm, INIT_PGD, true, false);
 }
 
+#ifdef CONFIG_X86_PIE
+static int __init address_markers_sort_cmp(const void *pa, const void *pb)
+{
+	struct addr_marker *a = (struct addr_marker *)pa;
+	struct addr_marker *b = (struct addr_marker *)pb;
+
+	return (a->start_address > b->start_address) -
+	       (a->start_address < b->start_address);
+}
+
+static void __init address_markers_sort(void)
+{
+	sort(&address_markers[0], ARRAY_SIZE(address_markers), sizeof(address_markers[0]),
+	     address_markers_sort_cmp, NULL);
+}
+#else
+static void __init address_markers_sort(void)
+{
+}
+#endif
+
 static int __init pt_dump_init(void)
 {
 	/*
@@ -475,6 +497,8 @@ static int __init pt_dump_init(void)
 	address_markers[LDT_NR].start_address = LDT_BASE_ADDR;
 # endif
 #endif
+	address_markers_sort();
+
 	return 0;
 }
 __initcall(pt_dump_init);
