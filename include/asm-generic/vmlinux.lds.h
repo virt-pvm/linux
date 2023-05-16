@@ -448,6 +448,13 @@
 #endif
 
 /*
+ * Allow architectures to put GOT in RO_DATA.
+ */
+#ifndef RO_GOT
+#define RO_GOT
+#endif
+
+/*
  * Read only Data
  */
 #define RO_DATA(align)							\
@@ -478,6 +485,7 @@
 		BOUNDED_SECTION_PRE_LABEL(.pci_fixup_suspend_late, _pci_fixups_suspend_late, __start, __end) \
 	}								\
 									\
+	RO_GOT								\
 	FW_LOADER_BUILT_IN_DATA						\
 	TRACEDATA							\
 									\
