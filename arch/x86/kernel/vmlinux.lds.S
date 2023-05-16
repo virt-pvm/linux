@@ -21,6 +21,13 @@
 #define EMITS_PT_NOTE
 #define RO_EXCEPTION_TABLE_ALIGN	16
 
+#ifdef CONFIG_X86_PIE
+#define RO_GOT				\
+	.got : AT(ADDR(.got) - LOAD_OFFSET) {	\
+		*(.got) *(.igot.*)		\
+	}
+#endif
+
 #include <asm-generic/vmlinux.lds.h>
 #include <asm/asm-offsets.h>
 #include <asm/thread_info.h>
@@ -438,6 +445,7 @@ SECTIONS
 #endif
 	       "Unexpected GOT/PLT entries detected!")
 
+#ifndef CONFIG_X86_PIE
 	/*
 	 * Sections that should stay zero sized, which is safer to
 	 * explicitly check instead of blindly discarding.
@@ -446,6 +454,7 @@ SECTIONS
 		*(.got) *(.igot.*)
 	}
 	ASSERT(SIZEOF(.got) == 0, "Unexpected GOT entries detected!")
+#endif
 
 	.plt : {
 		*(.plt) *(.plt.*) *(.iplt)
