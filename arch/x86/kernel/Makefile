@@ -44,6 +44,16 @@ KCOV_INSTRUMENT_sev.o					:= n
 
 CFLAGS_irq.o := -I $(srctree)/$(src)/../include/asm/trace
 
+# The mcmodel=kernel option is not compatible with the fPIE option, so it needs
+# to be removed. However, this would result in the use of the %fs register for
+# stack canary access if the stack protector is enabled. Additionally, per-cpu
+# stack protector is not currently supported for 64-bit. Since the head code is
+# in the early booting stage, it is safe to disable the stack protector for the
+# head code.
+CFLAGS_REMOVE_head64_identity.o += -mcmodel=kernel
+CFLAGS_head64_identity.o += -fPIE -include $(srctree)/include/linux/hidden.h
+CFLAGS_head64_identity.o += -fno-stack-protector
+
 obj-y			+= head_$(BITS).o
 obj-y			+= head$(BITS).o
 obj-y			+= ebda.o
