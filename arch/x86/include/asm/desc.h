@@ -431,6 +431,18 @@ static inline void idt_init_desc(gate_desc *gate, const struct idt_data *d)
 #endif
 }
 
+static inline void set_bringup_idt_handler(gate_desc *idt, int n, void *handler)
+{
+#ifdef CONFIG_AMD_MEM_ENCRYPT
+	struct idt_data data;
+	gate_desc desc;
+
+	init_idt_data(&data, n, handler);
+	idt_init_desc(&desc, &data);
+	native_write_idt_entry(idt, n, &desc);
+#endif
+}
+
 extern unsigned long system_vectors[];
 
 extern void load_current_idt(void);
