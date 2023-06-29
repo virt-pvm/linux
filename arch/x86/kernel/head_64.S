@@ -184,7 +184,11 @@ SYM_INNER_LABEL(secondary_startup_64_no_verify, SYM_L_GLOBAL)
 
 	/* Derive the runtime physical address of init_top_pgt[] */
 	leaq	init_top_pgt(%rip), %rax
+#ifdef CONFIG_X86_PIE
+	subq	kernel_map_base(%rip), %rax
+#else
 	subq	$__START_KERNEL_map, %rax
+#endif
 	addq	phys_base(%rip), %rax
 
 	/*

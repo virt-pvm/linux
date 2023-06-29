@@ -52,7 +52,11 @@ STACK_FRAME_NON_STANDARD __efi64_thunk
 	/*
 	 * Calculate the physical address of the kernel text.
 	 */
+#ifdef CONFIG_X86_PIE
+	movq	kernel_map_base(%rip), %rax
+#else
 	movq	$__START_KERNEL_map, %rax
+#endif
 	subq	phys_base(%rip), %rax
 
 	leaq	1f(%rip), %rbp
