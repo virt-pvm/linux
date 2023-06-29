@@ -123,6 +123,7 @@ unsigned long __head __startup_64(unsigned long physaddr,
 {
 	unsigned long load_delta, *p;
 	unsigned long pgtable_flags;
+	unsigned long text_base = SYM_ABS_VA(_text);
 	pgdval_t *pgd;
 	p4dval_t *p4d;
 	pudval_t *pud;
@@ -140,7 +141,7 @@ unsigned long __head __startup_64(unsigned long physaddr,
 	 * Compute the delta between the address I am compiled to run at
 	 * and the address I am actually running at.
 	 */
-	load_delta = physaddr - (SYM_ABS_VA(_text) - __START_KERNEL_map);
+	load_delta = physaddr - (text_base - __START_KERNEL_map);
 
 	/* Is the address not 2M aligned? */
 	if (load_delta & ~PMD_MASK)
@@ -152,7 +153,7 @@ unsigned long __head __startup_64(unsigned long physaddr,
 	/* Fixup the physical addresses in the page table */
 
 	pgd = (pgdval_t *)early_top_pgt;
-	p = pgd + pgd_index(__START_KERNEL_map);
+	p = pgd + pgd_index(text_base);
 	if (la57)
 		*p = (unsigned long)level4_kernel_pgt;
 	else
@@ -162,10 +163,28 @@ unsigned long __head __startup_64(unsigned long physaddr,
 	if (la57) {
 		p4d = (p4dval_t *)level4_kernel_pgt;
 		p4d[511] += load_delta;
+		if (IS_ENABLED(CONFIG_X86_PIE)) {
+			i = p4d_index(text_base);
+
+			if (i != 511) {
+				p4d[i] = p4d[511];
+				p4d[511] = 0;
+			}
+		}
 	}
 
 	level3_kernel_pgt[510].pud += load_delta;
 	level3_kernel_pgt[511].pud += load_delta;
+	if (IS_ENABLED(CONFIG_X86_PIE)) {
+		i = pud_index(text_base);
+
+		if (i != 510) {
+			level3_kernel_pgt[i].pud = level3_kernel_pgt[510].pud;
+			level3_kernel_pgt[i + 1].pud = level3_kernel_pgt[511].pud;
+			level3_kernel_pgt[510].pud = 0;
+			level3_kernel_pgt[511].pud = 0;
+		}
+	}
 
 	for (i = FIXMAP_PMD_TOP; i > FIXMAP_PMD_TOP - FIXMAP_PMD_NUM; i--)
 		level2_fixmap_pgt[i].pmd += load_delta;
@@ -232,7 +251,7 @@ unsigned long __head __startup_64(unsigned long physaddr,
 	pmd = (pmdval_t *)level2_kernel_pgt;
 
 	/* invalidate pages before the kernel image */
-	for (i = 0; i < pmd_index(SYM_ABS_VA(_text)); i++)
+	for (i = 0; i < pmd_index(text_base); i++)
 		pmd[i] &= ~_PAGE_PRESENT;
 
 	/* fixup pages that are part of the kernel image */

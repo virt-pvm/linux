@@ -70,7 +70,9 @@ EXPORT_SYMBOL(vmemmap_base);
 /* Wipe all early page tables except for the kernel symbol map */
 static void __init reset_early_page_tables(void)
 {
-	memset(early_top_pgt, 0, sizeof(pgd_t)*(PTRS_PER_PGD-1));
+	int k_index = pgd_index((unsigned long)_text);
+
+	memset(early_top_pgt, 0, sizeof(pgd_t)*k_index);
 	next_early_pgt = 0;
 	write_cr3(__sme_pa_nodebug(early_top_pgt));
 }
@@ -221,6 +223,8 @@ static void __init copy_bootdata(char *real_mode_data)
 
 asmlinkage __visible void __init __noreturn x86_64_start_kernel(char * real_mode_data)
 {
+	int k_index = pgd_index((unsigned long)_text);
+
 	/*
 	 * Build-time sanity checks on the kernel image and module
 	 * area mappings. (these are purely build-time and produce no code)
@@ -279,7 +283,7 @@ asmlinkage __visible void __init __noreturn x86_64_start_kernel(char * real_mode
 	load_ucode_bsp();
 
 	/* set init_top_pgt kernel high mapping*/
-	init_top_pgt[511] = early_top_pgt[511];
+	init_top_pgt[k_index] = early_top_pgt[k_index];
 
 	x86_64_start_reservations(real_mode_data);
 }
