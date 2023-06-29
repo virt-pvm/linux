@@ -20,10 +20,10 @@ extern unsigned long vmemmap_base;
 
 static __always_inline unsigned long __phys_addr_nodebug(unsigned long x)
 {
-	unsigned long y = x - __START_KERNEL_map;
+	unsigned long y = x - KERNEL_MAP_BASE;
 
-	/* use the carry flag to determine if x was < __START_KERNEL_map */
-	x = y + ((x > y) ? phys_base : (__START_KERNEL_map - PAGE_OFFSET));
+	/* use the carry flag to determine if x was < KERNEL_MAP_BASE */
+	x = y + ((x > y) ? phys_base : (KERNEL_MAP_BASE - PAGE_OFFSET));
 
 	return x;
 }
@@ -34,7 +34,7 @@ extern unsigned long __phys_addr_symbol(unsigned long);
 #else
 #define __phys_addr(x)		__phys_addr_nodebug(x)
 #define __phys_addr_symbol(x) \
-	((unsigned long)(x) - __START_KERNEL_map + phys_base)
+	((unsigned long)(x) - KERNEL_MAP_BASE + phys_base)
 #endif
 
 #define __phys_reloc_hide(x)	(x)

@@ -70,6 +70,17 @@ static bool __head check_la57_support(void)
 }
 #endif
 
+#ifdef CONFIG_X86_PIE
+static void __head set_kernel_map_base(unsigned long text_base)
+{
+	kernel_map_base = text_base & PUD_MASK;
+}
+#else
+static void __head set_kernel_map_base(unsigned long text_base)
+{
+}
+#endif
+
 #define SYM_ABS_VA(sym) ({					\
 	unsigned long __v;					\
 	asm("movabsq $" __stringify(sym) ", %0":"=r"(__v));	\
@@ -124,6 +135,7 @@ unsigned long __head __startup_64(unsigned long physaddr,
 	unsigned long load_delta, *p;
 	unsigned long pgtable_flags;
 	unsigned long text_base = SYM_ABS_VA(_text);
+	unsigned long kernel_map_base_offset;
 	pgdval_t *pgd;
 	p4dval_t *p4d;
 	pudval_t *pud;
@@ -185,6 +197,10 @@ unsigned long __head __startup_64(unsigned long physaddr,
 			level3_kernel_pgt[511].pud = 0;
 		}
 	}
+
+	set_kernel_map_base(text_base);
+	kernel_map_base_offset = KERNEL_MAP_BASE - __START_KERNEL_map;
+	__FIXADDR_TOP += kernel_map_base_offset;
 
 	for (i = FIXMAP_PMD_TOP; i > FIXMAP_PMD_TOP - FIXMAP_PMD_NUM; i--)
 		level2_fixmap_pgt[i].pmd += load_delta;
@@ -257,7 +273,7 @@ unsigned long __head __startup_64(unsigned long physaddr,
 	/* fixup pages that are part of the kernel image */
 	for (; i <= pmd_index(SYM_ABS_VA(_end)); i++)
 		if (pmd[i] & _PAGE_PRESENT)
-			pmd[i] += load_delta;
+			pmd[i] += load_delta + kernel_map_base_offset;
 
 	/* invalidate pages after the kernel image */
 	for (; i < PTRS_PER_PMD; i++)
@@ -267,7 +283,7 @@ unsigned long __head __startup_64(unsigned long physaddr,
 	 * Fixup phys_base - remove the memory encryption mask to obtain
 	 * the true physical address.
 	 */
-	phys_base += load_delta - sme_get_me_mask();
+	phys_base += load_delta + kernel_map_base_offset - sme_get_me_mask();
 
 	return sme_postprocess_startup(bp, pmd);
 }

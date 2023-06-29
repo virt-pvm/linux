@@ -127,7 +127,13 @@ SYM_CODE_START_NOALIGN(startup_64)
 	call	__startup_64
 
 	/* Form the CR3 value being sure to include the CR3 modifier */
+#ifdef CONFIG_X86_PIE
+	movq	kernel_map_base(%rip), %rdi
+	movabs	$early_top_pgt, %rcx
+	subq	%rdi, %rcx
+#else
 	movabs  $(early_top_pgt - __START_KERNEL_map), %rcx
+#endif
 	addq    %rcx, %rax
 	jmp 1f
 SYM_CODE_END(startup_64)
@@ -177,7 +183,13 @@ SYM_INNER_LABEL(secondary_startup_64_no_verify, SYM_L_GLOBAL)
 #endif
 
 	/* Form the CR3 value being sure to include the CR3 modifier */
+#ifdef CONFIG_X86_PIE
+	movq	kernel_map_base(%rip), %rdi
+	movabs	$init_top_pgt, %rcx
+	subq	%rdi, %rcx
+#else
 	movabs	$(init_top_pgt - __START_KERNEL_map), %rcx
+#endif
 	addq    %rcx, %rax
 1:
 

@@ -63,16 +63,16 @@ static inline bool kmsan_phys_addr_valid(unsigned long addr)
 static inline bool kmsan_virt_addr_valid(void *addr)
 {
 	unsigned long x = (unsigned long)addr;
-	unsigned long y = x - __START_KERNEL_map;
+	unsigned long y = x - KERNEL_MAP_BASE;
 
-	/* use the carry flag to determine if x was < __START_KERNEL_map */
+	/* use the carry flag to determine if x was < KERNEL_MAP_BASE */
 	if (unlikely(x > y)) {
 		x = y + phys_base;
 
 		if (y >= KERNEL_IMAGE_SIZE)
 			return false;
 	} else {
-		x = y + (__START_KERNEL_map - PAGE_OFFSET);
+		x = y + (KERNEL_MAP_BASE - PAGE_OFFSET);
 
 		/* carry flag will be set if starting x was >= PAGE_OFFSET */
 		if ((x > y) || !kmsan_phys_addr_valid(x))

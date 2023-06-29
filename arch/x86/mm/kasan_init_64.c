@@ -197,7 +197,7 @@ static inline p4d_t *early_p4d_offset(pgd_t *pgd, unsigned long addr)
 		return (p4d_t *)pgd;
 
 	p4d = pgd_val(*pgd) & PTE_PFN_MASK;
-	p4d += __START_KERNEL_map - phys_base;
+	p4d += KERNEL_MAP_BASE - phys_base;
 	return (p4d_t *)p4d + p4d_index(addr);
 }
 
@@ -420,7 +420,7 @@ void __init kasan_init(void)
 			      shadow_cea_per_cpu_begin, 0);
 
 	kasan_populate_early_shadow((void *)shadow_cea_end,
-			kasan_mem_to_shadow((void *)__START_KERNEL_map));
+			kasan_mem_to_shadow((void *)KERNEL_MAP_BASE));
 
 	kasan_populate_shadow((unsigned long)kasan_mem_to_shadow(_stext),
 			      (unsigned long)kasan_mem_to_shadow(_end),

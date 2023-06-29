@@ -4,6 +4,8 @@
 
 #ifndef __ASSEMBLY__
 #include <asm/kaslr.h>
+
+extern unsigned long kernel_map_base;
 #endif
 
 #ifdef CONFIG_KASAN
@@ -48,6 +50,12 @@
 #endif /* CONFIG_DYNAMIC_MEMORY_LAYOUT */
 
 #define __START_KERNEL_map	_AC(0xffffffff80000000, UL)
+
+#ifdef CONFIG_X86_PIE
+#define KERNEL_MAP_BASE		kernel_map_base
+#else
+#define KERNEL_MAP_BASE		__START_KERNEL_map
+#endif /* CONFIG_X86_PIE */
 
 /* See Documentation/arch/x86/x86_64/mm.rst for a description of the memory map. */
 

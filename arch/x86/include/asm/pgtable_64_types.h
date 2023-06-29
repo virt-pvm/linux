@@ -187,14 +187,16 @@ extern unsigned int ptrs_per_p4d;
 #define KMSAN_MODULES_ORIGIN_START	(KMSAN_MODULES_SHADOW_START + MODULES_LEN)
 #endif /* CONFIG_KMSAN */
 
-#define MODULES_VADDR		(__START_KERNEL_map + KERNEL_IMAGE_SIZE)
+#define RAW_MODULES_VADDR	(__START_KERNEL_map + KERNEL_IMAGE_SIZE)
+#define MODULES_VADDR		(KERNEL_MAP_BASE + KERNEL_IMAGE_SIZE)
 /* The module sections ends with the start of the fixmap */
 #ifndef CONFIG_DEBUG_KMAP_LOCAL_FORCE_MAP
-# define MODULES_END		_AC(0xffffffffff000000, UL)
+# define RAW_MODULES_END       _AC(0xffffffffff000000, UL)
 #else
-# define MODULES_END		_AC(0xfffffffffe000000, UL)
+# define RAW_MODULES_END       _AC(0xfffffffffe000000, UL)
 #endif
-#define MODULES_LEN		(MODULES_END - MODULES_VADDR)
+#define MODULES_LEN		(RAW_MODULES_END - RAW_MODULES_VADDR)
+#define MODULES_END		(MODULES_VADDR + MODULES_LEN)
 
 #define ESPFIX_PGD_ENTRY	_AC(-2, UL)
 #define ESPFIX_BASE_ADDR	(ESPFIX_PGD_ENTRY << P4D_SHIFT)
