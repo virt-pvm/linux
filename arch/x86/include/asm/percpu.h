@@ -35,6 +35,8 @@
 #define __percpu_prefix		"%%"__stringify(__percpu_seg)":"
 #define __my_cpu_offset		this_cpu_read(this_cpu_off)
 
+#define PER_CPU_VAR(var)	%__percpu_seg:(var)__percpu_rel
+
 /*
  * Compared to the generic __my_cpu_offset version, the following
  * saves one instruction and avoids clobbering a temp register.
@@ -49,6 +51,7 @@
 })
 #else
 #define __percpu_prefix		""
+#define PER_CPU_VAR(var)	(var)__percpu_rel
 #endif
 
 #define __percpu_arg(x)		__percpu_prefix "%" #x
