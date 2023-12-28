@@ -2642,6 +2642,16 @@ struct vm_struct *get_vm_area(unsigned long size, unsigned long flags)
 				  __builtin_return_address(0));
 }
 
+struct vm_struct *get_vm_area_align(unsigned long size, unsigned long align,
+				    unsigned long flags)
+{
+	return __get_vm_area_node(size, align, PAGE_SHIFT, flags,
+				  VMALLOC_START, VMALLOC_END,
+				  NUMA_NO_NODE, GFP_KERNEL,
+				  __builtin_return_address(0));
+}
+EXPORT_SYMBOL_GPL(get_vm_area_align);
+
 struct vm_struct *get_vm_area_caller(unsigned long size, unsigned long flags,
 				const void *caller)
 {
