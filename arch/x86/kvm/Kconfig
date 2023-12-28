@@ -118,6 +118,15 @@ config KVM_AMD_SEV
 	  Provides support for launching Encrypted VMs (SEV) and Encrypted VMs
 	  with Encrypted State (SEV-ES) on AMD processors.
 
+config KVM_PVM
+	tristate "Pagetable-based PV Virtual Machine"
+	depends on KVM && X86_64
+	help
+	  Provides Pagetable-based PV Virtual Machine for KVM.
+
+	  To compile this as a module, choose M here: the module
+	  will be called kvm-pvm.
+
 config KVM_SMM
 	bool "System Management Mode emulation"
 	default y
