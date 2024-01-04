@@ -142,6 +142,10 @@ For 32-bit we have the following conventions - kernel is built with
 	.endif
 .endm
 
+.macro SET_NOFLUSH_BIT	reg:req
+	bts	$X86_CR3_PCID_NOFLUSH_BIT, \reg
+.endm
+
 #ifdef CONFIG_PAGE_TABLE_ISOLATION
 
 /*
@@ -153,10 +157,6 @@ For 32-bit we have the following conventions - kernel is built with
 #define PTI_USER_PCID_BIT		X86_CR3_PTI_PCID_USER_BIT
 #define PTI_USER_PCID_MASK		(1 << PTI_USER_PCID_BIT)
 #define PTI_USER_PGTABLE_AND_PCID_MASK  (PTI_USER_PCID_MASK | PTI_USER_PGTABLE_MASK)
-
-.macro SET_NOFLUSH_BIT	reg:req
-	bts	$X86_CR3_PCID_NOFLUSH_BIT, \reg
-.endm
 
 .macro ADJUST_KERNEL_CR3 reg:req
 	ALTERNATIVE "", "SET_NOFLUSH_BIT \reg", X86_FEATURE_PCID
@@ -283,6 +283,45 @@ For 32-bit we have the following conventions - kernel is built with
 .endm
 
 #endif
+
+#define TSS_extra(field) PER_CPU_VAR(cpu_tss_rw+TSS_EX_##field)
+
+/*
+ * Switcher would be disabled when KPTI is enabled.
+ *
+ * Ideally, switcher would switch to HOST_CR3 in IST before gsbase is fixed,
+ * in which case it would use the offset from the IST stack top to the TSS
+ * in CEA to get the pointer of the TSS.  But SEV guest modifies TSS.IST on
+ * the fly and makes the code non-workable in SEV guest even the switcher
+ * is not used.
+ *
+ * So switcher is marked disabled when KPTI is enabled rather than when
+ * in SEV guest.
+ *
+ * To enable switcher with KPTI, something like Integrated Entry code with
+ * atomic-IST-entry has to be introduced beforehand.
+ *
+ * The current SWITCHER_SAVE_AND_SWITCH_TO_HOST_CR3 is called after gsbase
+ * is fixed.
+ */
+.macro SWITCHER_SAVE_AND_SWITCH_TO_HOST_CR3 scratch_reg:req save_reg:req
+	ALTERNATIVE "", "jmp .Lend_\@", X86_FEATURE_PTI
+	cmpq	$0, TSS_extra(host_rsp)
+	jz	.Lend_\@
+	movq	%cr3, \save_reg
+	movq	TSS_extra(host_cr3), \scratch_reg
+	movq	\scratch_reg, %cr3
+.Lend_\@:
+.endm
+
+.macro SWITCHER_RESTORE_CR3 scratch_reg:req save_reg:req
+	ALTERNATIVE "", "jmp .Lend_\@", X86_FEATURE_PTI
+	cmpq	$0, TSS_extra(host_rsp)
+	jz	.Lend_\@
+	ALTERNATIVE "", "SET_NOFLUSH_BIT \save_reg", X86_FEATURE_PCID
+	movq	\save_reg, %cr3
+.Lend_\@:
+.endm
 
 /*
  * IBRS kernel mitigation for Spectre_v2.

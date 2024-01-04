@@ -60,5 +60,13 @@ int main(void)
 	OFFSET(FIXED_stack_canary, fixed_percpu_data, stack_canary);
 	BLANK();
 #endif
+
+#define ENTRY(entry) OFFSET(TSS_EX_ ## entry, tss_struct, tss_ex.entry)
+	ENTRY(host_cr3);
+	ENTRY(host_rsp);
+	ENTRY(enter_cr3);
+	BLANK();
+#undef ENTRY
+
 	return 0;
 }

@@ -5,6 +5,7 @@
 #include <asm/segment.h>
 #include <asm/page_types.h>
 #include <uapi/asm/ptrace.h>
+#include <asm/switcher.h>
 
 #ifndef __ASSEMBLY__
 #ifdef __i386__
@@ -194,6 +195,8 @@ static __always_inline bool ip_within_syscall_gap(struct pt_regs *regs)
 	ret = ret || (regs->ip >= (unsigned long)entry_SYSRETL_compat_unsafe_stack &&
 		      regs->ip <  (unsigned long)entry_SYSRETL_compat_end);
 #endif
+	ret = ret || (regs->ip >= (unsigned long)entry_SYSCALL_64_switcher &&
+		      regs->ip <  (unsigned long)entry_SYSCALL_64_switcher_safe_stack);
 
 	return ret;
 }

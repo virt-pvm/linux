@@ -29,6 +29,7 @@ struct vm86;
 #include <asm/vmxfeatures.h>
 #include <asm/vdso/processor.h>
 #include <asm/shstk.h>
+#include <asm/switcher.h>
 
 #include <linux/personality.h>
 #include <linux/cache.h>
@@ -381,6 +382,10 @@ struct tss_struct {
 	 * errata.
 	 */
 	struct x86_hw_tss	x86_tss;
+
+#ifdef CONFIG_X86_64
+	struct tss_extra	tss_ex;
+#endif
 
 	struct x86_io_bitmap	io_bitmap;
 } __aligned(PAGE_SIZE);

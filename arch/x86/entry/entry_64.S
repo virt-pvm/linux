@@ -278,10 +278,11 @@ SYM_CODE_END(xen_error_entry)
 
 /**
  * idtentry_body - Macro to emit code calling the C function
+ * @vector:		Vector number
  * @cfunc:		C function to be called
  * @has_error_code:	Hardware pushed error code on stack
  */
-.macro idtentry_body cfunc has_error_code:req
+.macro idtentry_body vector cfunc has_error_code:req
 
 	/*
 	 * Call error_entry() and switch to the task stack if from userspace.
@@ -297,6 +298,10 @@ SYM_CODE_END(xen_error_entry)
 	ENCODE_FRAME_POINTER
 	UNWIND_HINT_REGS
 
+	cmpq	$0, TSS_extra(host_rsp)
+	jne	.Lpvm_idtentry_body_\@
+.L_host_idtenrty_\@:
+
 	movq	%rsp, %rdi			/* pt_regs pointer into 1st argument*/
 
 	.if \has_error_code == 1
@@ -310,6 +315,25 @@ SYM_CODE_END(xen_error_entry)
 	REACHABLE
 
 	jmp	error_return
+
+.Lpvm_idtentry_body_\@:
+	testb	$3, CS(%rsp)
+	/* host exception nested in IST handler while the switcher is active */
+	jz	.L_host_idtenrty_\@
+
+	.if \vector < 256
+	movl	$\vector, ORIG_RAX+4(%rsp)
+	.else // X86_TRAP_OTHER
+	/*
+	 * Here are the macros for common_interrupt(), spurious_interrupt(),
+	 * and XENPV entries with the titular vector X86_TRAP_OTHER. XENPV
+	 * entries can't reach here while common_interrupt() and
+	 * spurious_interrupt() have the real vector at ORIG_RAX.
+	 */
+	movl	ORIG_RAX(%rsp), %eax
+	movl	%eax, ORIG_RAX+4(%rsp)
+	.endif
+	jmp	switcher_return_from_guest
 .endm
 
 /**
@@ -354,7 +378,7 @@ SYM_CODE_START(\asmsym)
 .Lfrom_usermode_no_gap_\@:
 	.endif
 
-	idtentry_body \cfunc \has_error_code
+	idtentry_body \vector \cfunc \has_error_code
 
 _ASM_NOKPROBE(\asmsym)
 SYM_CODE_END(\asmsym)
@@ -427,7 +451,7 @@ SYM_CODE_START(\asmsym)
 
 	/* Switch to the regular task stack and use the noist entry point */
 .Lfrom_usermode_switch_stack_\@:
-	idtentry_body noist_\cfunc, has_error_code=0
+	idtentry_body \vector, noist_\cfunc, has_error_code=0
 
 _ASM_NOKPROBE(\asmsym)
 SYM_CODE_END(\asmsym)
@@ -507,7 +531,7 @@ SYM_CODE_START(\asmsym)
 
 	/* Switch to the regular task stack */
 .Lfrom_usermode_switch_stack_\@:
-	idtentry_body user_\cfunc, has_error_code=1
+	idtentry_body \vector, user_\cfunc, has_error_code=1
 
 _ASM_NOKPROBE(\asmsym)
 SYM_CODE_END(\asmsym)
@@ -920,6 +944,16 @@ SYM_CODE_START(paranoid_entry)
 .Lparanoid_gsbase_done:
 
 	/*
+	 * Switch back to kernel cr3 when switcher is active.
+	 * Switcher can't be used when KPTI is enabled by far, so only one of
+	 * SAVE_AND_SWITCH_TO_KERNEL_CR3 and SWITCHER_SAVE_AND_SWITCH_TO_KERNEL_CR3
+	 * takes effect.  SWITCHER_SAVE_AND_SWITCH_TO_KERNEL_CR3 requires
+	 * kernel GSBASE.
+	 * See the comments above SWITCHER_SAVE_AND_SWITCH_TO_HOST_CR3.
+	 */
+	SWITCHER_SAVE_AND_SWITCH_TO_HOST_CR3 scratch_reg=%rax save_reg=%r14
+
+	/*
 	 * Once we have CR3 and %GS setup save and set SPEC_CTRL. Just like
 	 * CR3 above, keep the old value in a callee saved register.
 	 */
@@ -969,6 +1003,15 @@ SYM_CODE_START_LOCAL(paranoid_exit)
 	 * exceptions go through error_return instead.
 	 */
 	RESTORE_CR3	scratch_reg=%rax save_reg=%r14
+
+	/*
+	 * Switch back to origin cr3 when switcher is active.
+	 * Switcher can't be used when KPTI is enabled by far, so only
+	 * one of RESTORE_CR3 and SWITCHER_RESTORE_CR3 takes effect.
+	 *
+	 * See the comments above SWITCHER_SAVE_AND_SWITCH_TO_HOST_CR3.
+	 */
+	SWITCHER_RESTORE_CR3 scratch_reg=%rax save_reg=%r14
 
 	/* Handle the three GSBASE cases */
 	ALTERNATIVE "jmp .Lparanoid_exit_checkgs", "", X86_FEATURE_FSGSBASE
@@ -1158,6 +1201,8 @@ SYM_CODE_START(asm_exc_nmi)
 	FENCE_SWAPGS_USER_ENTRY
 	SWITCH_TO_KERNEL_CR3 scratch_reg=%rdx
 	movq	%rsp, %rdx
+	cmpq	$0, TSS_extra(host_rsp)
+	jne	.Lnmi_from_pvm_guest
 	movq	PER_CPU_VAR(pcpu_hot + X86_top_of_stack), %rsp
 	UNWIND_HINT_IRET_REGS base=%rdx offset=8
 	pushq	5*8(%rdx)	/* pt_regs->ss */
@@ -1187,6 +1232,21 @@ SYM_CODE_START(asm_exc_nmi)
 	 * work, because we don't want to enable interrupts.
 	 */
 	jmp	swapgs_restore_regs_and_return_to_usermode
+
+.Lnmi_from_pvm_guest:
+	movq	PER_CPU_VAR(cpu_tss_rw + TSS_sp0), %rsp
+	UNWIND_HINT_IRET_REGS base=%rdx offset=8
+	pushq	5*8(%rdx)	/* pt_regs->ss */
+	pushq	4*8(%rdx)	/* pt_regs->rsp */
+	pushq	3*8(%rdx)	/* pt_regs->flags */
+	pushq	2*8(%rdx)	/* pt_regs->cs */
+	pushq	1*8(%rdx)	/* pt_regs->rip */
+	UNWIND_HINT_IRET_REGS
+	pushq	$0		/* pt_regs->orig_ax */
+	movl	$2, 4(%rsp)	/* pt_regs->orig_ax, pvm vector */
+	PUSH_AND_CLEAR_REGS rdx=(%rdx)
+	ENCODE_FRAME_POINTER
+	jmp	switcher_return_from_guest
 
 .Lnmi_from_kernel:
 	/*
