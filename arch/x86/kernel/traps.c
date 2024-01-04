@@ -878,6 +878,9 @@ DEFINE_IDTENTRY_RAW(exc_int3)
 asmlinkage __visible noinstr struct pt_regs *sync_regs(struct pt_regs *eregs)
 {
 	struct pt_regs *regs = (struct pt_regs *)current_top_of_stack() - 1;
+
+	if (this_cpu_read(cpu_tss_rw.tss_ex.host_rsp))
+		return eregs;
 	if (regs != eregs)
 		*regs = *eregs;
 	return regs;
