@@ -33,7 +33,7 @@ ifdef CONFIG_HYPERV
 kvm-amd-y		+= svm/svm_onhyperv.o
 endif
 
-kvm-pvm-y 		+= pvm/pvm.o
+kvm-pvm-y 		+= pvm/pvm.o pvm/host_mmu.o
 
 obj-$(CONFIG_KVM)	+= kvm.o
 obj-$(CONFIG_KVM_INTEL)	+= kvm-intel.o
