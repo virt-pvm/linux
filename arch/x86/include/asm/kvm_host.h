@@ -350,7 +350,8 @@ union kvm_mmu_page_role {
 		unsigned ad_disabled:1;
 		unsigned guest_mode:1;
 		unsigned passthrough:1;
-		unsigned :5;
+		unsigned host_mmu_la57_top_p4d:1;
+		unsigned :4;
 
 		/*
 		 * This is left at the top of the word so that
@@ -1490,6 +1491,12 @@ struct kvm_arch {
 #endif /* CONFIG_X86_64 */
 
 	/*
+	 * The root page table contains the host mapping PGDs, which will be
+	 * cloned into the guest's root SP during the root SP allocation.
+	 */
+	u64 *host_mmu_root_pgd;
+
+	/*
 	 * If set, at least one shadow root has been allocated. This flag
 	 * is used as one input when determining whether certain memslot
 	 * related allocations are necessary.
@@ -1752,6 +1759,8 @@ struct kvm_x86_ops {
 
 	void (*load_mmu_pgd)(struct kvm_vcpu *vcpu, hpa_t root_hpa,
 			     int root_level);
+
+	bool (*disallowed_va)(struct kvm_vcpu *vcpu, u64 la);
 
 	bool (*has_wbinvd_exit)(void);
 

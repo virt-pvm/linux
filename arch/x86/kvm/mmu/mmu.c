@@ -1736,6 +1736,18 @@ static unsigned kvm_page_table_hashfn(gfn_t gfn)
 	return hash_64(gfn, KVM_MMU_HASH_SHIFT);
 }
 
+#define HOST_ROOT_LEVEL (pgtable_l5_enabled() ? PT64_ROOT_5LEVEL : PT64_ROOT_4LEVEL)
+
+static inline bool pvm_mmu_p4d_at_la57_pgd511(struct kvm *kvm, u64 *sptep)
+{
+	if (!pgtable_l5_enabled())
+		return false;
+	if (!kvm->arch.host_mmu_root_pgd)
+		return false;
+
+	return sptep_to_sp(sptep)->role.level == 5 && spte_index(sptep) == 511;
+}
+
 static void mmu_page_add_parent_pte(struct kvm_mmu_memory_cache *cache,
 				    struct kvm_mmu_page *sp, u64 *parent_pte)
 {
@@ -1755,7 +1767,10 @@ static void drop_parent_pte(struct kvm *kvm, struct kvm_mmu_page *sp,
 			    u64 *parent_pte)
 {
 	mmu_page_remove_parent_pte(kvm, sp, parent_pte);
-	mmu_spte_clear_no_track(parent_pte);
+	if (!unlikely(sp->role.host_mmu_la57_top_p4d))
+		mmu_spte_clear_no_track(parent_pte);
+	else
+		__update_clear_spte_fast(parent_pte, kvm->arch.host_mmu_root_pgd[511]);
 }
 
 static void mark_unsync(u64 *spte);
@@ -2245,6 +2260,15 @@ static struct kvm_mmu_page *kvm_mmu_alloc_shadow_page(struct kvm *kvm,
 	list_add(&sp->link, &kvm->arch.active_mmu_pages);
 	kvm_account_mmu_page(kvm, sp);
 
+	/* install host mmu entries when PVM */
+	if (kvm->arch.host_mmu_root_pgd && role.level == HOST_ROOT_LEVEL) {
+		memcpy(sp->spt, kvm->arch.host_mmu_root_pgd, PAGE_SIZE);
+	} else if (role.host_mmu_la57_top_p4d) {
+		u64 *p4d = __va(kvm->arch.host_mmu_root_pgd[511] & SPTE_BASE_ADDR_MASK);
+
+		memcpy(sp->spt, p4d, PAGE_SIZE);
+	}
+
 	sp->gfn = gfn;
 	sp->role = role;
 	hlist_add_head(&sp->hash_link, sp_list);
@@ -2301,6 +2325,7 @@ static union kvm_mmu_page_role kvm_mmu_child_role(u64 *sptep, bool direct,
 	role.access = access;
 	role.direct = direct;
 	role.passthrough = 0;
+	role.host_mmu_la57_top_p4d = 0;
 
 	/*
 	 * If the guest has 4-byte PTEs then that means it's using 32-bit,
@@ -2346,6 +2371,9 @@ static struct kvm_mmu_page *kvm_mmu_get_child_sp(struct kvm_vcpu *vcpu,
 		return ERR_PTR(-EEXIST);
 
 	role = kvm_mmu_child_role(sptep, direct, access);
+	if (unlikely(pvm_mmu_p4d_at_la57_pgd511(vcpu->kvm, sptep)))
+		role.host_mmu_la57_top_p4d = 1;
+
 	return kvm_mmu_get_shadow_page(vcpu, gfn, role);
 }
 
@@ -2430,6 +2458,18 @@ static void __link_shadow_page(struct kvm *kvm,
 
 	spte = make_nonleaf_spte(sp->spt, sp_ad_disabled(sp));
 
+	/* for PVM, if the host has NX, force guest SMEP */
+	if (kvm->arch.host_mmu_root_pgd && cpu_feature_enabled(X86_FEATURE_NX)) {
+		struct kvm_mmu_page *parent = sptep_to_sp(sptep);
+
+		/*
+		 * validate_pvm_indirect_access() enables user sp linked beneath
+		 * kernel sp.
+		 */
+		if (!(parent->role.access & ACC_USER_MASK) && (sp->role.access & ACC_USER_MASK))
+			spte |= shadow_nx_mask;
+	}
+
 	mmu_spte_set(sptep, spte);
 
 	mmu_page_add_parent_pte(cache, sp, sptep);
@@ -2451,6 +2491,40 @@ static void link_shadow_page(struct kvm_vcpu *vcpu, u64 *sptep,
 			     struct kvm_mmu_page *sp)
 {
 	__link_shadow_page(vcpu->kvm, &vcpu->arch.mmu_pte_list_desc_cache, sptep, sp, true);
+}
+
+static unsigned validate_pvm_indirect_access(struct kvm_vcpu *vcpu, u64 *sptep,
+					     unsigned access, unsigned leaf_access)
+{
+	/*
+	 * return directly when non-pvm or it is going to create user sp/spte
+	 * which is allowed under both kernel and user sp
+	 */
+	if (!vcpu->kvm->arch.host_mmu_root_pgd || (leaf_access & ACC_USER_MASK))
+		return access;
+
+	access &= ~ACC_USER_MASK;
+
+	if (is_shadow_present_pte(*sptep) && !is_large_pte(*sptep)) {
+		struct kvm_mmu_page *child;
+
+		/*
+		 * For the pvm indirect sp, if the previous linked child
+		 * is for user pagetable, no kernel sp/page should be
+		 * mapped under the child, so the child should be updated
+		 * if it is the case.  It is not possible the case for
+		 * current Linux PVM guest, but this check has to be examed
+		 * for correctness.
+		 */
+		child = spte_to_child_sp(*sptep);
+		if (!(child->role.access & ACC_USER_MASK))
+			return access;
+
+		drop_parent_pte(vcpu->kvm, child, sptep);
+		kvm_flush_remote_tlbs_sptep(vcpu->kvm, sptep);
+	}
+
+	return access;
 }
 
 static void validate_direct_spte(struct kvm_vcpu *vcpu, u64 *sptep,
@@ -5563,6 +5637,16 @@ static void kvm_init_shadow_mmu(struct kvm_vcpu *vcpu,
 
 	/* KVM uses PAE paging whenever the guest isn't using 64-bit paging. */
 	root_role.level = max_t(u32, root_role.level, PT32E_ROOT_LEVEL);
+
+	/* Shadow MMU level should be the same as host for PVM */
+	if (vcpu->kvm->arch.host_mmu_root_pgd) {
+		if (root_role.level != HOST_ROOT_LEVEL) {
+			root_role.level = HOST_ROOT_LEVEL;
+			root_role.passthrough = 1;
+		}
+		if (static_call(kvm_x86_get_cpl)(vcpu) == 0)
+			root_role.access &= ~ACC_USER_MASK;
+	}
 
 	/*
 	 * KVM forces EFER.NX=1 when TDP is disabled, reflect it in the MMU role.
