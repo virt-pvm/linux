@@ -1745,6 +1745,18 @@ static unsigned kvm_page_table_hashfn(gfn_t gfn)
 	return hash_64(gfn, KVM_MMU_HASH_SHIFT);
 }
 
+#define HOST_ROOT_LEVEL (pgtable_l5_enabled() ? PT64_ROOT_5LEVEL : PT64_ROOT_4LEVEL)
+
+static inline bool pvm_mmu_p4d_at_la57_pgd511(struct kvm *kvm, u64 *sptep)
+{
+	if (!pgtable_l5_enabled())
+		return false;
+	if (!kvm->arch.host_mmu_root_pgd)
+		return false;
+
+	return sptep_to_sp(sptep)->role.level == 5 && spte_index(sptep) == 511;
+}
+
 static void mmu_page_add_parent_pte(struct kvm_mmu_memory_cache *cache,
 				    struct kvm_mmu_page *sp, u64 *parent_pte)
 {
@@ -1764,7 +1776,10 @@ static void drop_parent_pte(struct kvm *kvm, struct kvm_mmu_page *sp,
 			    u64 *parent_pte)
 {
 	mmu_page_remove_parent_pte(kvm, sp, parent_pte);
-	mmu_spte_clear_no_track(parent_pte);
+	if (!unlikely(sp->role.host_mmu_la57_top_p4d))
+		mmu_spte_clear_no_track(parent_pte);
+	else
+		__update_clear_spte_fast(parent_pte, kvm->arch.host_mmu_root_pgd[511]);
 }
 
 static void mark_unsync(u64 *spte);
@@ -2253,6 +2268,15 @@ static struct kvm_mmu_page *kvm_mmu_alloc_shadow_page(struct kvm *kvm,
 	list_add(&sp->link, &kvm->arch.active_mmu_pages);
 	kvm_account_mmu_page(kvm, sp);
 
+	/* install host mmu entries when PVM */
+	if (kvm->arch.host_mmu_root_pgd && role.level == HOST_ROOT_LEVEL) {
+		memcpy(sp->spt, kvm->arch.host_mmu_root_pgd, PAGE_SIZE);
+	} else if (role.host_mmu_la57_top_p4d) {
+		u64 *p4d = __va(kvm->arch.host_mmu_root_pgd[511] & SPTE_BASE_ADDR_MASK);
+
+		memcpy(sp->spt, p4d, PAGE_SIZE);
+	}
+
 	sp->gfn = gfn;
 	sp->role = role;
 	hlist_add_head(&sp->hash_link, sp_list);
@@ -2354,6 +2378,9 @@ static struct kvm_mmu_page *kvm_mmu_get_child_sp(struct kvm_vcpu *vcpu,
 		return ERR_PTR(-EEXIST);
 
 	role = kvm_mmu_child_role(sptep, direct, access);
+	if (unlikely(pvm_mmu_p4d_at_la57_pgd511(vcpu->kvm, sptep)))
+		role.host_mmu_la57_top_p4d = 1;
+
 	return kvm_mmu_get_shadow_page(vcpu, gfn, role);
 }
 
@@ -5270,6 +5297,12 @@ static void kvm_init_shadow_mmu(struct kvm_vcpu *vcpu,
 
 	/* KVM uses PAE paging whenever the guest isn't using 64-bit paging. */
 	root_role.level = max_t(u32, root_role.level, PT32E_ROOT_LEVEL);
+
+	/* Shadow MMU level should be the same as host for PVM */
+	if (vcpu->kvm->arch.host_mmu_root_pgd && root_role.level != HOST_ROOT_LEVEL) {
+		root_role.level = HOST_ROOT_LEVEL;
+		root_role.passthrough = 1;
+	}
 
 	/*
 	 * KVM forces EFER.NX=1 when TDP is disabled, reflect it in the MMU role.

@@ -336,6 +336,9 @@ retry_walk:
 			goto error;
 		--walker->level;
 	}
+
+	if (static_call(kvm_x86_disallowed_va)(vcpu, addr))
+		goto error;
 #endif
 	walker->max_level = walker->level;
 
