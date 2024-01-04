@@ -186,6 +186,10 @@ bool make_spte(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
 	if (pte_access & ACC_USER_MASK)
 		spte |= shadow_user_mask;
 
+	/* PVM guest is always running in hardware CPL3. */
+	if (vcpu->kvm->arch.host_mmu_root_pgd)
+		spte |= shadow_user_mask;
+
 	if (level > PG_LEVEL_4K)
 		spte |= PT_PAGE_SIZE_MASK;
 
