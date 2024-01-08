@@ -6,6 +6,7 @@
 #include <asm/fpu/xstate.h>
 #include <asm/mce.h>
 #include <asm/pvclock.h>
+#include <asm/fred.h>
 #include "kvm_cache_regs.h"
 #include "kvm_emulate.h"
 
@@ -501,6 +502,30 @@ static inline void kvm_machine_check(void)
 
 	do_machine_check(&regs);
 #endif
+}
+
+void kvm_do_host_nmi_irqoff(void);
+void kvm_do_host_interrupt_irqoff(unsigned long entry);
+
+static __always_inline void kvm_do_nmi_irqoff(struct kvm_vcpu *vcpu)
+{
+	kvm_before_interrupt(vcpu, KVM_HANDLING_NMI);
+	if (cpu_feature_enabled(X86_FEATURE_FRED))
+		fred_entry_from_kvm(EVENT_TYPE_NMI, NMI_VECTOR);
+	else
+		kvm_do_host_nmi_irqoff();
+	kvm_after_interrupt(vcpu);
+}
+
+static inline void kvm_do_interrupt_irqoff(struct kvm_vcpu *vcpu, unsigned int vector,
+					   unsigned long entry)
+{
+	kvm_before_interrupt(vcpu, KVM_HANDLING_IRQ);
+	if (cpu_feature_enabled(X86_FEATURE_FRED))
+		fred_entry_from_kvm(EVENT_TYPE_EXTINT, vector);
+	else
+		kvm_do_host_interrupt_irqoff(entry);
+	kvm_after_interrupt(vcpu);
 }
 
 void kvm_load_guest_xsave_state(struct kvm_vcpu *vcpu);
