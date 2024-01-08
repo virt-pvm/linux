@@ -1527,6 +1527,7 @@ SYM_CODE_START(entry_SYSCALL32_ignore)
 	mov	$-ENOSYS, %eax
 	sysretl
 SYM_CODE_END(entry_SYSCALL32_ignore)
+EXPORT_SYMBOL_GPL(entry_SYSCALL32_ignore)
 
 .pushsection .text, "ax"
 	__FUNC_ALIGN
