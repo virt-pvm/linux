@@ -6920,9 +6920,6 @@ static void vmx_apicv_pre_state_restore(struct kvm_vcpu *vcpu)
 	memset(vmx->pi_desc.pir, 0, sizeof(vmx->pi_desc.pir));
 }
 
-void vmx_do_interrupt_irqoff(unsigned long entry);
-void vmx_do_nmi_irqoff(void);
-
 static void handle_nm_fault_irqoff(struct kvm_vcpu *vcpu)
 {
 	/*
@@ -6968,9 +6965,7 @@ static void handle_external_interrupt_irqoff(struct kvm_vcpu *vcpu)
 	    "unexpected VM-Exit interrupt info: 0x%x", intr_info))
 		return;
 
-	kvm_before_interrupt(vcpu, KVM_HANDLING_IRQ);
-	vmx_do_interrupt_irqoff(gate_offset(desc));
-	kvm_after_interrupt(vcpu);
+	kvm_do_interrupt_irqoff(vcpu, gate_offset(desc));
 
 	vcpu->arch.at_instruction_boundary = true;
 }
@@ -7260,11 +7255,8 @@ static noinstr void vmx_vcpu_enter_exit(struct kvm_vcpu *vcpu,
 		vmx->idt_vectoring_info = vmcs_read32(IDT_VECTORING_INFO_FIELD);
 
 	if ((u16)vmx->exit_reason.basic == EXIT_REASON_EXCEPTION_NMI &&
-	    is_nmi(vmx_get_intr_info(vcpu))) {
-		kvm_before_interrupt(vcpu, KVM_HANDLING_NMI);
-		vmx_do_nmi_irqoff();
-		kvm_after_interrupt(vcpu);
-	}
+	    is_nmi(vmx_get_intr_info(vcpu)))
+		kvm_do_nmi_irqoff(vcpu);
 
 out:
 	guest_state_exit_irqoff();

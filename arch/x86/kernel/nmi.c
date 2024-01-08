@@ -568,13 +568,13 @@ nmi_restart:
 		mds_user_clear_cpu_buffers();
 }
 
-#if IS_ENABLED(CONFIG_KVM_INTEL)
-DEFINE_IDTENTRY_RAW(exc_nmi_kvm_vmx)
+#if IS_ENABLED(CONFIG_KVM)
+DEFINE_IDTENTRY_RAW(exc_nmi_kvm)
 {
 	exc_nmi(regs);
 }
-#if IS_MODULE(CONFIG_KVM_INTEL)
-EXPORT_SYMBOL_GPL(asm_exc_nmi_kvm_vmx);
+#if IS_MODULE(CONFIG_KVM)
+EXPORT_SYMBOL_GPL(asm_exc_nmi_kvm);
 #endif
 #endif
 
