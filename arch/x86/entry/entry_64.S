@@ -1581,6 +1581,7 @@ SYM_CODE_START(entry_SYSCALL32_ignore)
 	CLEAR_CPU_BUFFERS
 	sysretl
 SYM_CODE_END(entry_SYSCALL32_ignore)
+EXPORT_SYMBOL_GPL(entry_SYSCALL32_ignore)
 #endif
 
 .pushsection .text, "ax"
