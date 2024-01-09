@@ -84,6 +84,7 @@
 #include <asm/intel_pt.h>
 #include <asm/emulate_prefix.h>
 #include <asm/sgx.h>
+#include <asm/pvm_para.h>
 #include <clocksource/hyperv_timer.h>
 
 #define CREATE_TRACE_POINTS
@@ -1524,6 +1525,15 @@ static const u32 emulated_msrs_all[] = {
 
 	MSR_KVM_ASYNC_PF_EN, MSR_KVM_STEAL_TIME,
 	MSR_KVM_PV_EOI_EN, MSR_KVM_ASYNC_PF_INT, MSR_KVM_ASYNC_PF_ACK,
+
+	MSR_PVM_LINEAR_ADDRESS_RANGE,
+	MSR_PVM_VCPU_STRUCT,
+	MSR_PVM_SUPERVISOR_RSP,
+	MSR_PVM_SUPERVISOR_REDZONE,
+	MSR_PVM_EVENT_ENTRY,
+	MSR_PVM_RETU_RIP,
+	MSR_PVM_RETS_RIP,
+	MSR_PVM_SWITCH_CR3,
 
 	MSR_IA32_TSC_ADJUST,
 	MSR_IA32_TSC_DEADLINE,

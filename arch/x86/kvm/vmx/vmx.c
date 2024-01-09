@@ -43,6 +43,7 @@
 #include <asm/irq_remapping.h>
 #include <asm/reboot.h>
 #include <asm/perf_event.h>
+#include <asm/pvm_para.h>
 #include <asm/mmu_context.h>
 #include <asm/mshyperv.h>
 #include <asm/mwait.h>
@@ -7003,6 +7004,9 @@ static bool vmx_has_emulated_msr(struct kvm *kvm, u32 index)
 	case MSR_AMD64_VIRT_SPEC_CTRL:
 	case MSR_AMD64_TSC_RATIO:
 		/* This is AMD only.  */
+		return false;
+	case PVM_VIRTUAL_MSR_BASE ... PVM_VIRTUAL_MSR_MAX:
+		/* This is PVM only. */
 		return false;
 	default:
 		return true;

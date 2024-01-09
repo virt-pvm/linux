@@ -31,6 +31,7 @@
 
 #include <asm/apic.h>
 #include <asm/perf_event.h>
+#include <asm/pvm_para.h>
 #include <asm/tlbflush.h>
 #include <asm/desc.h>
 #include <asm/debugreg.h>
@@ -4280,6 +4281,9 @@ static bool svm_has_emulated_msr(struct kvm *kvm, u32 index)
 	switch (index) {
 	case MSR_IA32_MCG_EXT_CTL:
 	case KVM_FIRST_EMULATED_VMX_MSR ... KVM_LAST_EMULATED_VMX_MSR:
+		return false;
+	case PVM_VIRTUAL_MSR_BASE ... PVM_VIRTUAL_MSR_MAX:
+		/* This is PVM only. */
 		return false;
 	case MSR_IA32_SMBASE:
 		if (!IS_ENABLED(CONFIG_KVM_SMM))
