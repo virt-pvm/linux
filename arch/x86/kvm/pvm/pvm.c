@@ -1294,6 +1294,36 @@ static int handle_exit_breakpoint(struct kvm_vcpu *vcpu)
 	return 1;
 }
 
+static bool handle_synthetic_instruction_pvm_cpuid(struct kvm_vcpu *vcpu)
+{
+	/* invlpg 0xffffffffff4d5650; cpuid; */
+	static const char pvm_synthetic_cpuid_insns[] = { PVM_SYNTHETIC_CPUID };
+	char insns[10];
+	struct x86_exception e;
+
+	if (kvm_read_guest_virt(vcpu, kvm_get_linear_rip(vcpu),
+				insns, sizeof(insns), &e) == 0 &&
+	    memcmp(insns, pvm_synthetic_cpuid_insns, sizeof(insns)) == 0) {
+		u32 eax, ebx, ecx, edx;
+
+		if (unlikely(pvm_guest_allowed_va(vcpu, PVM_SYNTHETIC_CPUID_ADDRESS)))
+			kvm_mmu_invlpg(vcpu, PVM_SYNTHETIC_CPUID_ADDRESS);
+
+		eax = kvm_rax_read(vcpu);
+		ecx = kvm_rcx_read(vcpu);
+		kvm_cpuid(vcpu, &eax, &ebx, &ecx, &edx, false);
+		kvm_rax_write(vcpu, eax);
+		kvm_rbx_write(vcpu, ebx);
+		kvm_rcx_write(vcpu, ecx);
+		kvm_rdx_write(vcpu, edx);
+
+		kvm_rip_write(vcpu, kvm_rip_read(vcpu) + sizeof(insns));
+		return true;
+	}
+
+	return false;
+}
+
 static int handle_exit_exception(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
@@ -1321,6 +1351,9 @@ static int handle_exit_exception(struct kvm_vcpu *vcpu)
 		return kvm_handle_page_fault(vcpu, error_code, pvm->exit_cr2,
 					     NULL, 0);
 	case GP_VECTOR:
+		if (is_smod(pvm) && handle_synthetic_instruction_pvm_cpuid(vcpu))
+			return 1;
+
 		err = kvm_emulate_instruction(vcpu, EMULTYPE_PVM_GP);
 		if (!err)
 			return 0;
