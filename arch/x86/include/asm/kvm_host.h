@@ -2198,7 +2198,17 @@ unsigned long __kvm_emulate_hypercall(struct kvm_vcpu *vcpu, unsigned long nr,
 				      unsigned long a0, unsigned long a1,
 				      unsigned long a2, unsigned long a3,
 				      int op_64_bit, int cpl);
-int kvm_emulate_hypercall(struct kvm_vcpu *vcpu);
+int kvm_handle_hypercall(struct kvm_vcpu *vcpu, bool skip);
+
+static inline int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
+{
+	return kvm_handle_hypercall(vcpu, true);
+}
+
+static inline int kvm_emulate_hypercall_noskip(struct kvm_vcpu *vcpu)
+{
+	return kvm_handle_hypercall(vcpu, false);
+}
 
 int kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa, u64 error_code,
 		       void *insn, int insn_len);
