@@ -9933,7 +9933,7 @@ static int complete_hypercall_exit(struct kvm_vcpu *vcpu)
 	return kvm_skip_emulated_instruction(vcpu);
 }
 
-int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
+int kvm_handle_hypercall(struct kvm_vcpu *vcpu, bool skip)
 {
 	unsigned long nr, a0, a1, a2, a3, ret;
 	int op_64_bit;
@@ -10034,9 +10034,13 @@ out:
 	kvm_rax_write(vcpu, ret);
 
 	++vcpu->stat.hypercalls;
-	return kvm_skip_emulated_instruction(vcpu);
+
+	if (skip)
+		return kvm_skip_emulated_instruction(vcpu);
+
+	return 1;
 }
-EXPORT_SYMBOL_GPL(kvm_emulate_hypercall);
+EXPORT_SYMBOL_GPL(kvm_handle_hypercall);
 
 static int emulator_fix_hypercall(struct x86_emulate_ctxt *ctxt)
 {
