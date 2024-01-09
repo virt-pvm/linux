@@ -8,6 +8,9 @@
 #include <asm/processor.h>
 #include <uapi/asm/kvm_para.h>
 
+extern u32 kvm_cpuid_vendor_features;
+extern u32 kvm_cpuid_vendor_signature;
+
 extern u32 kvm_cpu_caps[NR_KVM_CPU_CAPS] __read_mostly;
 void kvm_set_cpu_caps(void);
 

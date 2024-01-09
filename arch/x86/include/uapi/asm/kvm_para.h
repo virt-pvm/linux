@@ -5,7 +5,9 @@
 #include <linux/types.h>
 
 /* This CPUID returns the signature 'KVMKVMKVM' in ebx, ecx, and edx.  It
- * should be used to determine that a VM is running under KVM.
+ * should be used to determine that a VM is running under KVM. And it
+ * returns KVM_CPUID_FEATURES in eax if vendor feature is not enabled,
+ * otherwise KVM_CPUID_VENDOR_FEATURES.
  */
 #define KVM_CPUID_SIGNATURE	0x40000000
 #define KVM_SIGNATURE "KVMKVMKVM\0\0\0"
@@ -16,6 +18,10 @@
  * in edx.
  */
 #define KVM_CPUID_FEATURES	0x40000001
+/* This CPUID returns the vendor feature bitmaps in eax and the vendor
+ * signature in ebx.
+ */
+#define KVM_CPUID_VENDOR_FEATURES	0x40000002
 #define KVM_FEATURE_CLOCKSOURCE		0
 #define KVM_FEATURE_NOP_IO_DELAY	1
 #define KVM_FEATURE_MMU_OP		2
