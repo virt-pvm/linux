@@ -1962,6 +1962,12 @@ u64 vcpu_tsc_khz(struct kvm_vcpu *vcpu);
  *                          an instruction if it could generate a given software
  *                          interrupt, which must be encoded via
  *                          EMULTYPE_SET_SOFT_INT_VECTOR().
+ * EMULTYPE_PVM_GP - Set when emulating an intercepted #GP for PVM. Privilege
+ *		     instruction in PVM guest supervisor mode will trigger a
+ *		     #GP and be emulated by PVM. But if a non-privilege
+ *		     instruction triggers a #GP in PVM guest supervisor mode
+ *		     and is not implemented in the emulator, the emulator
+ *		     should reinject the #GP into guest.
  */
 #define EMULTYPE_NO_DECODE	    (1 << 0)
 #define EMULTYPE_TRAP_UD	    (1 << 1)
@@ -1976,6 +1982,7 @@ u64 vcpu_tsc_khz(struct kvm_vcpu *vcpu);
 
 #define EMULTYPE_SET_SOFT_INT_VECTOR(v)	((u32)((v) & 0xff) << 16)
 #define EMULTYPE_GET_SOFT_INT_VECTOR(e)	(((e) >> 16) & 0xff)
+#define EMULTYPE_PVM_GP             (1 << 10)
 
 int kvm_emulate_instruction(struct kvm_vcpu *vcpu, int emulation_type);
 int kvm_emulate_instruction_from_buffer(struct kvm_vcpu *vcpu,
