@@ -198,6 +198,8 @@ static __always_inline bool ip_within_syscall_gap(struct pt_regs *regs)
 	ret = ret || (regs->ip >= (unsigned long)entry_SYSCALL_64_switcher &&
 		      regs->ip <  (unsigned long)entry_SYSCALL_64_switcher_safe_stack);
 
+	ret = ret || (regs->ip == (unsigned long)entry_SYSRETQ_switcher_unsafe_stack);
+
 	return ret;
 }
 #endif

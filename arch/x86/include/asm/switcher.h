@@ -8,6 +8,40 @@
 #define SWITCH_EXIT_REASONS_SYSCALL		1024
 #define SWITCH_EXIT_REASONS_FAILED_VMETNRY	1025
 
+/*
+ * SWITCH_FLAGS control the way how the switcher code works,
+ *	mostly dictate whether it should directly do the guest ring
+ *	switch or just go back to hypervisor.
+ *
+ * SMOD and UMOD
+ *	Current vcpu mode. Use two parity bits to simplify direct-switch
+ *	flags checking.
+ *
+ * NO_DS_CR3
+ *	Not to direct switch due to smod_cr3 or umod_cr3 not having been
+ *	prepared.
+ */
+#define SWITCH_FLAGS_SMOD			_BITULL(0)
+#define SWITCH_FLAGS_UMOD			_BITULL(1)
+#define SWITCH_FLAGS_NO_DS_CR3			_BITULL(2)
+
+#define SWITCH_FLAGS_MOD_TOGGLE			(SWITCH_FLAGS_SMOD | SWITCH_FLAGS_UMOD)
+
+/*
+ * Direct switching disabling bits are all the bits other than
+ * SWITCH_FLAGS_SMOD or SWITCH_FLAGS_UMOD. Bits 8-64 are defined by the driver
+ * using the switcher. Direct switching is enabled if all the disabling bits
+ * are cleared.
+ *
+ * SWITCH_FLAGS_NO_DS_TO_SMOD: not to direct switch to smod due to any
+ * disabling bit or smod bit being set.
+ *
+ * SWITCH_FLAGS_NO_DS_TO_UMOD: not to direct switch to umod due to any
+ * disabling bit or umod bit being set.
+ */
+#define SWITCH_FLAGS_NO_DS_TO_SMOD		(~SWITCH_FLAGS_UMOD)
+#define SWITCH_FLAGS_NO_DS_TO_UMOD		(~SWITCH_FLAGS_SMOD)
+
 /* Bits allowed to be set in the underlying eflags */
 #define SWITCH_ENTER_EFLAGS_ALLOWED	(X86_EFLAGS_FIXED | X86_EFLAGS_IF |\
 					 X86_EFLAGS_TF | X86_EFLAGS_RF |\
@@ -24,6 +58,7 @@
 #include <linux/cache.h>
 
 struct pt_regs;
+struct pvm_vcpu_struct;
 
 /*
  * Extra per CPU control structure lives in the struct tss_struct.
@@ -46,6 +81,31 @@ struct tss_extra {
 	unsigned long host_rsp;
 	/* Prepared guest CR3 to be loaded before VM enter. */
 	unsigned long enter_cr3;
+
+	/*
+	 * Direct switching flag indicates whether direct switching
+	 * is allowed.
+	 */
+	unsigned long switch_flags ____cacheline_aligned;
+	/*
+	 * Guest supervisor mode hardware CR3 for direct switching of guest
+	 * user mode syscall.
+	 */
+	unsigned long smod_cr3;
+	/*
+	 * Guest user mode hardware CR3 for direct switching of guest ERETU
+	 * synthetic instruction.
+	 */
+	unsigned long umod_cr3;
+	/*
+	 * The current PVCS for saving and restoring guest user mode context
+	 * in direct switching.
+	 */
+	struct pvm_vcpu_struct *pvcs;
+	unsigned long retu_rip;
+	unsigned long smod_entry;
+	unsigned long smod_gsbase;
+	unsigned long smod_rsp;
 } ____cacheline_aligned;
 
 extern struct pt_regs *switcher_enter_guest(void);
