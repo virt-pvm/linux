@@ -471,9 +471,24 @@ static void pvm_flush_hwtlb_gva(struct kvm_vcpu *vcpu, gva_t addr)
 	put_cpu();
 }
 
+static u64 get_switch_hw_cr3(struct vcpu_pvm *pvm)
+{
+	struct kvm_mmu *mmu = pvm->vcpu.arch.mmu;
+	union kvm_mmu_page_role switch_role = mmu->root_role;
+
+	switch_role.access ^= ACC_USER_MASK;
+
+	if (is_root_usable(&mmu->prev_roots[0], pvm->vcpu.arch.cr3, switch_role))
+		return __sme_set(mmu->prev_roots[0].hpa);
+
+	return INVALID_PAGE;
+}
+
 static void pvm_set_host_cr3_for_guest(struct vcpu_pvm *pvm)
 {
 	u64 hw_cr3 = __sme_set(pvm->vcpu.arch.mmu->root.hpa);
+	u64 switch_hw_cr3 = get_switch_hw_cr3(pvm);
+	u64 enter_cr3 = hw_cr3;
 
 	if (static_cpu_has(X86_FEATURE_PCID)) {
 		u32 pcid = pvm->vcpu.arch.cr3 & X86_CR3_PCID_MASK;
@@ -481,20 +496,41 @@ static void pvm_set_host_cr3_for_guest(struct vcpu_pvm *pvm)
 		update_asid(pvm);
 
 		pcid = guest_pcid_to_host_pcid(pvm, pcid, is_smod(pvm));
-		hw_cr3 |= pcid;
+		hw_cr3 |= pcid | CR3_NOFLUSH;
+		if (switch_hw_cr3 != INVALID_PAGE)
+			switch_hw_cr3 |= (pcid ^ PVM_GUEST_PTI_PCID_MASK) | CR3_NOFLUSH;
+
+		enter_cr3 |= pcid;
 		if (!pvm->flush_hwtlb_current)
-			hw_cr3 |= CR3_NOFLUSH;
+			enter_cr3 |= CR3_NOFLUSH;
 		pvm->flush_hwtlb_current = false;
 
 		/*
 		 * if guest PCID is bigger than 7, use the fallback guest PCID
 		 * 0, which is assumed to always be force flushed.
 		 */
-		if (unlikely(!(pcid & PVM_GUEST_PCID_INDEX_MASK)))
+		if (unlikely(!(pcid & PVM_GUEST_PCID_INDEX_MASK))) {
+			enter_cr3 &= ~CR3_NOFLUSH;
 			hw_cr3 &= ~CR3_NOFLUSH;
+			if (switch_hw_cr3 != INVALID_PAGE)
+				switch_hw_cr3 &= ~CR3_NOFLUSH;
+		}
 	}
 
-	this_cpu_write(cpu_tss_rw.tss_ex.enter_cr3, hw_cr3);
+	this_cpu_write(cpu_tss_rw.tss_ex.enter_cr3, enter_cr3);
+
+	if (is_smod(pvm)) {
+		this_cpu_write(cpu_tss_rw.tss_ex.smod_cr3, hw_cr3);
+		this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, switch_hw_cr3);
+	} else {
+		this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, hw_cr3);
+		this_cpu_write(cpu_tss_rw.tss_ex.smod_cr3, switch_hw_cr3);
+	}
+
+	if (switch_hw_cr3 != INVALID_PAGE)
+		pvm->switch_flags &= ~SWITCH_FLAGS_NO_DS_CR3;
+	else
+		pvm->switch_flags |= SWITCH_FLAGS_NO_DS_CR3;
 }
 
 static void pvm_set_host_cr3_for_hypervisor(struct vcpu_pvm *pvm)
@@ -510,6 +546,8 @@ static void pvm_set_host_cr3_for_hypervisor(struct vcpu_pvm *pvm)
 
 // Set tss_ex.host_cr3 for VMExit.
 // Set tss_ex.enter_cr3 for VMEnter.
+// Set tss_ex.smod_cr3 and tss_ex.umod_cr3 and set or clear
+// SWITCH_FLAGS_NO_DS_CR3 for direct switching.
 static void pvm_set_host_cr3(struct vcpu_pvm *pvm)
 {
 	pvm_set_host_cr3_for_hypervisor(pvm);
@@ -803,8 +841,16 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		pvm->msr_vcpu_struct = data;
 		kvm_make_request(KVM_REQ_EVENT, vcpu);
 		if (!data) {
+			pvm->switch_flags |= SWITCH_FLAGS_PVCS_INVALID;
 			kvm_gpc_deactivate(&pvm->pvcs_gpc);
 		} else {
+			/*
+			 * Clear the 'SWITCH_FLAGS_PVCS_INVALID' bit even if the
+			 * GPC activation fails, since a 'KVM_REQ_GPC_REFRESH'
+			 * request is being set. Therefore, it must be valid
+			 * before VM entry or a triple fault will be triggered.
+			 */
+			pvm->switch_flags &= ~SWITCH_FLAGS_PVCS_INVALID;
 			if (kvm_gpc_activate(&pvm->pvcs_gpc, data, PAGE_SIZE))
 				kvm_make_request(KVM_REQ_GPC_REFRESH, vcpu);
 		}
@@ -979,6 +1025,11 @@ static bool pvm_apic_init_signal_blocked(struct kvm_vcpu *vcpu)
 
 static void update_exception_bitmap(struct kvm_vcpu *vcpu)
 {
+	/* disable direct switch when single step debugging */
+	if (vcpu->guest_debug & KVM_GUESTDBG_SINGLESTEP)
+		to_pvm(vcpu)->switch_flags |= SWITCH_FLAGS_SINGLE_STEP;
+	else
+		to_pvm(vcpu)->switch_flags &= ~SWITCH_FLAGS_SINGLE_STEP;
 }
 
 static struct pvm_vcpu_struct *pvm_get_vcpu_struct(struct vcpu_pvm *pvm)
@@ -1085,6 +1136,17 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 		else
 			kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
 
+		/*
+		 * Reuse SWITCH_FLAGS_IRQ_WIN to force the guest ERETU back to
+		 * the hypervisor to meet the requirement stipulated above in
+		 * case it is on the path to ERETU.
+		 *
+		 * When forced back to handle_synthetic_instruction_return_user(),
+		 * SWITCH_FLAGS_IRQ_WIN will be cleared in kvm_set_rflags() or
+		 * unhandled NMI/MCE will be reinjected.
+		 */
+		pvm->switch_flags |= SWITCH_FLAGS_IRQ_WIN;
+
 		pvm_put_vcpu_struct(pvm, true);
 
 		return 1;
@@ -1148,6 +1210,9 @@ static void pvm_set_rflags(struct kvm_vcpu *vcpu, unsigned long rflags)
 
 	pvm->rflags = rflags;
 
+	if (rflags & X86_EFLAGS_IF)
+		pvm->switch_flags &= ~SWITCH_FLAGS_IRQ_WIN;
+
 	/*
 	 * The IF bit of 'pvcs->event_flags' should not be changed in user
 	 * mode. It is recommended for this bit to be cleared when switching to
@@ -1180,6 +1245,7 @@ static void pvm_set_interrupt_shadow(struct kvm_vcpu *vcpu, int mask)
 
 static void enable_irq_window(struct kvm_vcpu *vcpu)
 {
+	to_pvm(vcpu)->switch_flags |= SWITCH_FLAGS_IRQ_WIN;
 	pvm_event_flags_update(vcpu, PVM_EVENT_FLAGS_IP, 0);
 }
 
@@ -1306,6 +1372,7 @@ static int handle_synthetic_instruction_return_user(struct kvm_vcpu *vcpu)
 static int handle_hc_irq_window(struct kvm_vcpu *vcpu)
 {
 	kvm_make_request(KVM_REQ_EVENT, vcpu);
+	to_pvm(vcpu)->switch_flags &= ~SWITCH_FLAGS_IRQ_WIN;
 	pvm_event_flags_update(vcpu, 0, PVM_EVENT_FLAGS_IP);
 
 	++vcpu->stat.irq_window_exits;
@@ -2040,6 +2107,7 @@ static __always_inline void load_regs(struct kvm_vcpu *vcpu, struct pt_regs *gue
 
 static noinstr void pvm_vcpu_run_noinstr(struct kvm_vcpu *vcpu)
 {
+	struct tss_extra *tss_ex = this_cpu_ptr(&cpu_tss_rw.tss_ex);
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 	struct pt_regs *sp0_regs = (struct pt_regs *)this_cpu_read(cpu_tss_rw.x86_tss.sp0) - 1;
 	struct pt_regs *ret_regs;
@@ -2049,11 +2117,21 @@ static noinstr void pvm_vcpu_run_noinstr(struct kvm_vcpu *vcpu)
 	// Load guest registers into the host sp0 stack for switcher.
 	load_regs(vcpu, sp0_regs);
 
+	// Prepare context for direct switching.
+	tss_ex->switch_flags = pvm->switch_flags;
+	tss_ex->pvcs = pvm->pvcs_gpc.khva;
+	tss_ex->retu_rip = pvm->msr_retu_rip_plus2;
+	tss_ex->smod_entry = pvm->msr_lstar;
+	tss_ex->smod_gsbase = pvm->msr_kernel_gs_base;
+
 	if (unlikely(pvm->guest_dr7 & DR7_BP_EN_MASK))
 		set_debugreg(pvm_eff_dr7(vcpu), 7);
 
 	// Call into switcher and enter guest.
 	ret_regs = switcher_enter_guest();
+
+	// Get the resulted mode.
+	pvm->switch_flags = tss_ex->switch_flags;
 
 	// Get the guest registers from the host sp0 stack.
 	save_regs(vcpu, ret_regs);
@@ -2134,6 +2212,7 @@ static inline void pvm_load_host_xsave_state(struct kvm_vcpu *vcpu)
 static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu, bool force_immediate_exit)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	bool is_smod_before_run = is_smod(pvm);
 
 	/*
 	 * Per to PVM specification, if the GPC of PVCS is invalid, meaning
@@ -2157,6 +2236,11 @@ static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu, bool force_immediate_exit)
 		update_debugctlmsr(0);
 
 	pvm_vcpu_run_noinstr(vcpu);
+
+	if (is_smod_before_run != is_smod(pvm)) {
+		vcpu->arch.mmu->root_role.access ^= ACC_USER_MASK;
+		swap(pvm->vcpu.arch.mmu->root, pvm->vcpu.arch.mmu->prev_roots[0]);
+	}
 
 	/* MSR_IA32_DEBUGCTLMSR is zeroed before vmenter. Restore it if needed */
 	if (pvm->host_debugctlmsr)
