@@ -29,6 +29,9 @@
 MODULE_AUTHOR("AntGroup");
 MODULE_LICENSE("GPL");
 
+static bool __read_mostly enable_cpuid_intercept = 0;
+module_param_named(cpuid_intercept, enable_cpuid_intercept, bool, 0444);
+
 static bool __read_mostly is_intel;
 
 static unsigned long host_idt_base;
@@ -166,6 +169,53 @@ static bool pvm_disallowed_va(struct kvm_vcpu *vcpu, u64 va)
 		return true;
 
 	return !pvm_guest_allowed_va(vcpu, va);
+}
+
+static void __set_cpuid_faulting(bool on)
+{
+	u64 msrval;
+
+	rdmsrl_safe(MSR_MISC_FEATURES_ENABLES, &msrval);
+	msrval &= ~MSR_MISC_FEATURES_ENABLES_CPUID_FAULT;
+	msrval |= (on << MSR_MISC_FEATURES_ENABLES_CPUID_FAULT_BIT);
+	wrmsrl(MSR_MISC_FEATURES_ENABLES, msrval);
+}
+
+static void reset_cpuid_intercept(struct kvm_vcpu *vcpu)
+{
+	if (test_thread_flag(TIF_NOCPUID))
+		return;
+
+	if (enable_cpuid_intercept || cpuid_fault_enabled(vcpu))
+		__set_cpuid_faulting(false);
+}
+
+static void set_cpuid_intercept(struct kvm_vcpu *vcpu)
+{
+	if (test_thread_flag(TIF_NOCPUID))
+		return;
+
+	if (enable_cpuid_intercept || cpuid_fault_enabled(vcpu))
+		__set_cpuid_faulting(true);
+}
+
+static void pvm_update_guest_cpuid_faulting(struct kvm_vcpu *vcpu, u64 data)
+{
+	bool guest_enabled = cpuid_fault_enabled(vcpu);
+	bool set_enabled = data & MSR_MISC_FEATURES_ENABLES_CPUID_FAULT;
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	if (!(guest_enabled ^ set_enabled))
+		return;
+	if (enable_cpuid_intercept)
+		return;
+	if (test_thread_flag(TIF_NOCPUID))
+		return;
+
+	preempt_disable();
+	if (pvm->loaded_cpu_state)
+		__set_cpuid_faulting(set_enabled);
+	preempt_enable();
 }
 
 // switch_to_smod() and switch_to_umod() switch the mode (smod/umod) and
@@ -335,6 +385,8 @@ static void pvm_prepare_switch_to_guest(struct kvm_vcpu *vcpu)
 
 	segments_save_host_and_switch_to_guest(pvm);
 
+	set_cpuid_intercept(vcpu);
+
 	kvm_set_user_return_msr(0, (u64)entry_SYSCALL_64_switcher, -1ull);
 	kvm_set_user_return_msr(1, pvm->msr_tsc_aux, -1ull);
 	if (ia32_enabled()) {
@@ -351,6 +403,8 @@ static void pvm_prepare_switch_to_host(struct vcpu_pvm *pvm)
 		return;
 
 	++pvm->vcpu.stat.host_state_reload;
+
+	reset_cpuid_intercept(&pvm->vcpu);
 
 #ifdef CONFIG_MODIFY_LDT_SYSCALL
 	if (unlikely(current->mm->context.ldt))
@@ -936,6 +990,17 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		break;
 	case MSR_IA32_DEBUGCTLMSR:
 		/* It is ignored now. */
+		break;
+	case MSR_MISC_FEATURES_ENABLES:
+		ret = kvm_set_msr_common(vcpu, msr_info);
+		if (!ret)
+			pvm_update_guest_cpuid_faulting(vcpu, data);
+		break;
+	case MSR_PLATFORM_INFO:
+		if ((data & MSR_PLATFORM_INFO_CPUID_FAULT) &&
+		     !boot_cpu_has(X86_FEATURE_CPUID_FAULT))
+			return 1;
+		ret = kvm_set_msr_common(vcpu, msr_info);
 		break;
 	case MSR_PVM_VCPU_STRUCT:
 		if (!PAGE_ALIGNED(data))
@@ -2923,6 +2988,10 @@ static int __init hardware_cap_check(void)
 	}
 	if (!boot_cpu_has(X86_FEATURE_CX16)) {
 		pr_warn("CMPXCHG16B is required for guest.\n");
+		return -EOPNOTSUPP;
+	}
+	if (!boot_cpu_has(X86_FEATURE_CPUID_FAULT) && enable_cpuid_intercept) {
+		pr_warn("Host doesn't support cpuid faulting.\n");
 		return -EOPNOTSUPP;
 	}
 
