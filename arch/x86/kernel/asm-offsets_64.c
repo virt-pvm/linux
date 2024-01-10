@@ -4,6 +4,7 @@
 #endif
 
 #include <asm/ia32.h>
+#include <asm/pvm_para.h>
 
 #if defined(CONFIG_KVM_GUEST)
 #include <asm/kvm_para.h>
@@ -65,6 +66,28 @@ int main(void)
 	ENTRY(host_cr3);
 	ENTRY(host_rsp);
 	ENTRY(enter_cr3);
+	ENTRY(switch_flags);
+	ENTRY(smod_cr3);
+	ENTRY(umod_cr3);
+	ENTRY(pvcs);
+	ENTRY(retu_rip);
+	ENTRY(smod_entry);
+	ENTRY(smod_gsbase);
+	ENTRY(smod_rsp);
+	BLANK();
+#undef ENTRY
+
+#define ENTRY(entry) OFFSET(PVCS_ ## entry, pvm_vcpu_struct, entry)
+	ENTRY(event_flags);
+	ENTRY(event_errcode);
+	ENTRY(user_cs);
+	ENTRY(user_ss);
+	ENTRY(user_gsbase);
+	ENTRY(rsp);
+	ENTRY(eflags);
+	ENTRY(rip);
+	ENTRY(rcx);
+	ENTRY(r11);
 	BLANK();
 #undef ENTRY
 
