@@ -59,7 +59,7 @@ void gfn_to_pfn_cache_invalidate_start(struct kvm *kvm, unsigned long start,
 		 * KVM needs to ensure the vCPU is fully out of guest context
 		 * before allowing the invalidation to continue.
 		 */
-		unsigned int req = KVM_REQ_OUTSIDE_GUEST_MODE;
+		unsigned int req = kvm_gpc_refresh_request();
 		bool called;
 
 		/*

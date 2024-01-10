@@ -167,6 +167,7 @@ static inline bool is_error_page(struct page *page)
 #define KVM_REQ_VM_DEAD			(1 | KVM_REQUEST_WAIT | KVM_REQUEST_NO_WAKEUP)
 #define KVM_REQ_UNBLOCK			2
 #define KVM_REQ_DIRTY_RING_SOFT_FULL	3
+#define KVM_REQ_GPC_REFRESH		(5 | KVM_REQUEST_WAIT | KVM_REQUEST_NO_WAKEUP)
 #define KVM_REQUEST_ARCH_BASE		8
 
 /*
@@ -1366,6 +1367,15 @@ int kvm_gpc_refresh(struct gfn_to_pfn_cache *gpc, unsigned long len);
  * invocation.
  */
 void kvm_gpc_deactivate(struct gfn_to_pfn_cache *gpc);
+
+static inline unsigned int kvm_gpc_refresh_request(void)
+{
+#ifdef __KVM_HAVE_GUEST_USE_PFN_USAGE
+	return KVM_REQ_GPC_REFRESH;
+#else
+	return KVM_REQ_OUTSIDE_GUEST_MODE;
+#endif
+}
 
 void kvm_sigset_activate(struct kvm_vcpu *vcpu);
 void kvm_sigset_deactivate(struct kvm_vcpu *vcpu);
