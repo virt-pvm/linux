@@ -1762,6 +1762,8 @@ struct kvm_x86_ops {
 
 	bool (*disallowed_va)(struct kvm_vcpu *vcpu, u64 la);
 
+	void (*vcpu_gpc_refresh)(struct kvm_vcpu *vcpu);
+
 	bool (*has_wbinvd_exit)(void);
 
 	u64 (*get_l2_tsc_offset)(struct kvm_vcpu *vcpu);
@@ -1934,6 +1936,8 @@ static inline int kvm_arch_flush_remote_tlbs_range(struct kvm *kvm, gfn_t gfn,
 	return kvm_x86_call(flush_remote_tlbs_range)(kvm, gfn, nr_pages);
 }
 #endif /* CONFIG_HYPERV */
+
+#define __KVM_HAVE_GUEST_USE_PFN_USAGE
 
 enum kvm_intr_type {
 	/* Values are arbitrary, but must be non-zero. */

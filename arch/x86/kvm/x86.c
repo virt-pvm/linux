@@ -10873,6 +10873,9 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 				goto out;
 			}
 		}
+
+		if (kvm_check_request(KVM_REQ_GPC_REFRESH, vcpu))
+			kvm_x86_call(vcpu_gpc_refresh)(vcpu);
 	}
 
 	if (kvm_check_request(KVM_REQ_EVENT, vcpu) || req_int_win ||
