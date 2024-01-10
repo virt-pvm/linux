@@ -5,7 +5,22 @@
 #include <linux/kvm_host.h>
 #include <asm/switcher.h>
 
-#define SWITCH_FLAGS_INIT	(SWITCH_FLAGS_SMOD)
+/*
+ * Extra switch flags:
+ *
+ * IRQ_WIN:
+ *	There is an irq window request, and the vcpu should not directly
+ *	switch to context with IRQ enabled, e.g. user mode.
+ * SINGLE_STEP:
+ *	KVM_GUESTDBG_SINGLESTEP is set.
+ * PVCS_INVALID:
+ *	The GPC of PVCS is invalid and khva is NULL.
+ */
+#define SWITCH_FLAGS_IRQ_WIN				_BITULL(8)
+#define SWITCH_FLAGS_SINGLE_STEP			_BITULL(9)
+#define SWITCH_FLAGS_PVCS_INVALID			_BITULL(10)
+
+#define SWITCH_FLAGS_INIT	(SWITCH_FLAGS_SMOD | SWITCH_FLAGS_PVCS_INVALID)
 
 #define PVM_SYSCALL_VECTOR		SWITCH_EXIT_REASONS_SYSCALL
 #define PVM_FAILED_VMENTRY_VECTOR	SWITCH_EXIT_REASONS_FAILED_VMETNRY
