@@ -5,6 +5,21 @@
 #include <linux/kvm_host.h>
 #include <asm/switcher.h>
 
+/*
+ * Extra switch flags:
+ *
+ * IRQ_WIN:
+ *	There is an irq window request, and the vcpu should not directly
+ *	switch to context with IRQ enabled, e.g. user mode.
+ * NMI_WIN:
+ *	There is an NMI window request.
+ * SINGLE_STEP:
+ *	KVM_GUESTDBG_SINGLESTEP is set.
+ */
+#define SWITCH_FLAGS_IRQ_WIN				_BITULL(8)
+#define SWITCH_FLAGS_NMI_WIN				_BITULL(9)
+#define SWITCH_FLAGS_SINGLE_STEP			_BITULL(10)
+
 #define SWITCH_FLAGS_INIT	(SWITCH_FLAGS_SMOD)
 
 #define PVM_SYSCALL_VECTOR		SWITCH_EXIT_REASONS_SYSCALL

@@ -559,23 +559,70 @@ static void pvm_flush_hwtlb_gva(struct kvm_vcpu *vcpu, gva_t addr)
 	put_cpu();
 }
 
+static bool check_switch_cr3(struct vcpu_pvm *pvm, u64 switch_host_cr3)
+{
+	u64 root = pvm->vcpu.arch.mmu->prev_roots[0].hpa;
+
+	if (pvm->vcpu.arch.mmu->prev_roots[0].pgd != pvm->msr_switch_cr3)
+		return false;
+	if (!VALID_PAGE(root))
+		return false;
+	if (host_pcid_owner(switch_host_cr3 & X86_CR3_PCID_MASK) != pvm)
+		return false;
+	if (host_pcid_root(switch_host_cr3 & X86_CR3_PCID_MASK) != root)
+		return false;
+	if (root != (switch_host_cr3 & CR3_ADDR_MASK))
+		return false;
+
+	return true;
+}
+
 static void pvm_set_host_cr3_for_guest_with_host_pcid(struct vcpu_pvm *pvm)
 {
 	u64 root_hpa = pvm->vcpu.arch.mmu->root.hpa;
 	bool flush = false;
 	u32 host_pcid = host_pcid_get(pvm, root_hpa, &flush);
 	u64 hw_cr3 = root_hpa | host_pcid;
+	u64 switch_host_cr3;
 
 	if (!flush)
 		hw_cr3 |= CR3_NOFLUSH;
 	this_cpu_write(cpu_tss_rw.tss_ex.enter_cr3, hw_cr3);
+
+	if (is_smod(pvm)) {
+		this_cpu_write(cpu_tss_rw.tss_ex.smod_cr3, hw_cr3 | CR3_NOFLUSH);
+		switch_host_cr3 = this_cpu_read(cpu_tss_rw.tss_ex.umod_cr3);
+	} else {
+		this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, hw_cr3 | CR3_NOFLUSH);
+		switch_host_cr3 = this_cpu_read(cpu_tss_rw.tss_ex.smod_cr3);
+	}
+
+	if (check_switch_cr3(pvm, switch_host_cr3))
+		pvm->switch_flags &= ~SWITCH_FLAGS_NO_DS_CR3;
+	else
+		pvm->switch_flags |= SWITCH_FLAGS_NO_DS_CR3;
 }
 
 static void pvm_set_host_cr3_for_guest_without_host_pcid(struct vcpu_pvm *pvm)
 {
 	u64 root_hpa = pvm->vcpu.arch.mmu->root.hpa;
+	u64 switch_root = 0;
+
+	if (pvm->vcpu.arch.mmu->prev_roots[0].pgd == pvm->msr_switch_cr3) {
+		switch_root = pvm->vcpu.arch.mmu->prev_roots[0].hpa;
+		pvm->switch_flags &= ~SWITCH_FLAGS_NO_DS_CR3;
+	} else {
+		pvm->switch_flags |= SWITCH_FLAGS_NO_DS_CR3;
+	}
 
 	this_cpu_write(cpu_tss_rw.tss_ex.enter_cr3, root_hpa);
+	if (is_smod(pvm)) {
+		this_cpu_write(cpu_tss_rw.tss_ex.smod_cr3, root_hpa);
+		this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, switch_root);
+	} else {
+		this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, root_hpa);
+		this_cpu_write(cpu_tss_rw.tss_ex.smod_cr3, switch_root);
+	}
 }
 
 static void pvm_set_host_cr3_for_hypervisor(struct vcpu_pvm *pvm)
@@ -591,6 +638,8 @@ static void pvm_set_host_cr3_for_hypervisor(struct vcpu_pvm *pvm)
 
 // Set tss_ex.host_cr3 for VMExit.
 // Set tss_ex.enter_cr3 for VMEnter.
+// Set tss_ex.smod_cr3 and tss_ex.umod_cr3 and set or clear
+// SWITCH_FLAGS_NO_DS_CR3 for direct switching.
 static void pvm_set_host_cr3(struct vcpu_pvm *pvm)
 {
 	pvm_set_host_cr3_for_hypervisor(pvm);
@@ -1058,6 +1107,11 @@ static bool pvm_apic_init_signal_blocked(struct kvm_vcpu *vcpu)
 
 static void update_exception_bitmap(struct kvm_vcpu *vcpu)
 {
+	/* disable direct switch when single step debugging */
+	if (vcpu->guest_debug & KVM_GUESTDBG_SINGLESTEP)
+		to_pvm(vcpu)->switch_flags |= SWITCH_FLAGS_SINGLE_STEP;
+	else
+		to_pvm(vcpu)->switch_flags &= ~SWITCH_FLAGS_SINGLE_STEP;
 }
 
 static struct pvm_vcpu_struct *pvm_get_vcpu_struct(struct vcpu_pvm *pvm)
@@ -1288,10 +1342,12 @@ static void pvm_set_rflags(struct kvm_vcpu *vcpu, unsigned long rflags)
 	if (!need_update || !is_smod(pvm))
 		return;
 
-	if (rflags & X86_EFLAGS_IF)
+	if (rflags & X86_EFLAGS_IF) {
+		pvm->switch_flags &= ~SWITCH_FLAGS_IRQ_WIN;
 		pvm_event_flags_update(vcpu, X86_EFLAGS_IF, PVM_EVENT_FLAGS_IP);
-	else
+	} else {
 		pvm_event_flags_update(vcpu, 0, X86_EFLAGS_IF);
+	}
 }
 
 static bool pvm_get_if_flag(struct kvm_vcpu *vcpu)
@@ -1311,6 +1367,7 @@ static void pvm_set_interrupt_shadow(struct kvm_vcpu *vcpu, int mask)
 
 static void enable_irq_window(struct kvm_vcpu *vcpu)
 {
+	to_pvm(vcpu)->switch_flags |= SWITCH_FLAGS_IRQ_WIN;
 	pvm_event_flags_update(vcpu, PVM_EVENT_FLAGS_IP, 0);
 }
 
@@ -1332,6 +1389,7 @@ static void pvm_set_nmi_mask(struct kvm_vcpu *vcpu, bool masked)
 
 static void enable_nmi_window(struct kvm_vcpu *vcpu)
 {
+	to_pvm(vcpu)->switch_flags |= SWITCH_FLAGS_NMI_WIN;
 }
 
 static int pvm_nmi_allowed(struct kvm_vcpu *vcpu, bool for_injection)
@@ -1360,6 +1418,8 @@ static void pvm_inject_irq(struct kvm_vcpu *vcpu, bool reinjected)
 	int irq = vcpu->arch.interrupt.nr;
 
 	trace_kvm_inj_virq(irq, vcpu->arch.interrupt.soft, false);
+
+	to_pvm(vcpu)->switch_flags &= ~SWITCH_FLAGS_IRQ_WIN;
 
 	if (do_pvm_event(vcpu, irq, false, 0))
 		kvm_clear_interrupt_queue(vcpu);
@@ -1397,6 +1457,7 @@ static int handle_synthetic_instruction_return_user(struct kvm_vcpu *vcpu)
 
 	// instruction to return user means nmi allowed.
 	pvm->nmi_mask = false;
+	pvm->switch_flags &= ~(SWITCH_FLAGS_IRQ_WIN | SWITCH_FLAGS_NMI_WIN);
 
 	/*
 	 * switch to user mode before kvm_set_rflags() to avoid PVM_EVENT_FLAGS_IF
@@ -1448,6 +1509,7 @@ static int handle_synthetic_instruction_return_supervisor(struct kvm_vcpu *vcpu)
 
 	// instruction to return supervisor means nmi allowed.
 	pvm->nmi_mask = false;
+	pvm->switch_flags &= ~SWITCH_FLAGS_NMI_WIN;
 
 	kvm_set_rflags(vcpu, frame.rflags);
 	kvm_rip_write(vcpu, frame.rip);
@@ -1461,6 +1523,7 @@ static int handle_synthetic_instruction_return_supervisor(struct kvm_vcpu *vcpu)
 static int handle_hc_interrupt_window(struct kvm_vcpu *vcpu)
 {
 	kvm_make_request(KVM_REQ_EVENT, vcpu);
+	to_pvm(vcpu)->switch_flags &= ~SWITCH_FLAGS_IRQ_WIN;
 	pvm_event_flags_update(vcpu, 0, PVM_EVENT_FLAGS_IP);
 
 	++vcpu->stat.irq_window_exits;
@@ -2199,6 +2262,7 @@ static __always_inline void load_regs(struct kvm_vcpu *vcpu, struct pt_regs *gue
 
 static noinstr void pvm_vcpu_run_noinstr(struct kvm_vcpu *vcpu)
 {
+	struct tss_extra *tss_ex = this_cpu_ptr(&cpu_tss_rw.tss_ex);
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 	struct pt_regs *sp0_regs = (struct pt_regs *)this_cpu_read(cpu_tss_rw.x86_tss.sp0) - 1;
 	struct pt_regs *ret_regs;
@@ -2208,11 +2272,24 @@ static noinstr void pvm_vcpu_run_noinstr(struct kvm_vcpu *vcpu)
 	// Load guest registers into the host sp0 stack for switcher.
 	load_regs(vcpu, sp0_regs);
 
+	// Prepare context for direct switching.
+	tss_ex->switch_flags = pvm->switch_flags;
+	tss_ex->pvcs = pvm->pvcs_gpc.khva;
+	tss_ex->retu_rip = pvm->msr_retu_rip_plus2;
+	tss_ex->smod_entry = pvm->msr_lstar;
+	tss_ex->smod_gsbase = pvm->msr_kernel_gs_base;
+	tss_ex->smod_rsp = pvm->msr_supervisor_rsp;
+
 	if (unlikely(pvm->guest_dr7 & DR7_BP_EN_MASK))
 		set_debugreg(pvm_eff_dr7(vcpu), 7);
 
 	// Call into switcher and enter guest.
 	ret_regs = switcher_enter_guest();
+
+	// Get the resulted mode and PVM MSRs which might be changed
+	// when direct switching.
+	pvm->switch_flags = tss_ex->switch_flags;
+	pvm->msr_supervisor_rsp = tss_ex->smod_rsp;
 
 	// Get the guest registers from the host sp0 stack.
 	save_regs(vcpu, ret_regs);
@@ -2293,6 +2370,7 @@ static inline void pvm_load_host_xsave_state(struct kvm_vcpu *vcpu)
 static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	bool is_smod_befor_run = is_smod(pvm);
 
 	trace_kvm_entry(vcpu);
 
@@ -2306,6 +2384,11 @@ static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu)
 		update_debugctlmsr(0);
 
 	pvm_vcpu_run_noinstr(vcpu);
+
+	if (is_smod_befor_run != is_smod(pvm)) {
+		swap(pvm->vcpu.arch.mmu->root, pvm->vcpu.arch.mmu->prev_roots[0]);
+		swap(pvm->msr_switch_cr3, pvm->vcpu.arch.cr3);
+	}
 
 	/* MSR_IA32_DEBUGCTLMSR is zeroed before vmenter. Restore it if needed */
 	if (pvm->host_debugctlmsr)
