@@ -1954,6 +1954,13 @@ u64 vcpu_tsc_khz(struct kvm_vcpu *vcpu);
  *			     the gfn, i.e. retrying the instruction will hit a
  *			     !PRESENT fault, which results in a new shadow page
  *			     and sends KVM back to square one.
+ *
+ * EMULTYPE_PVM_GP - Set when emulating an intercepted #GP for PVM. Privilege
+ *		     instruction in PVM guest supervisor mode will trigger a
+ *		     #GP and be emulated by PVM. But if a non-privilege
+ *		     instruction triggers a #GP in PVM guest supervisor mode
+ *		     and is not implemented in the emulator, the emulator
+ *		     should reinject the #GP into guest.
  */
 #define EMULTYPE_NO_DECODE	    (1 << 0)
 #define EMULTYPE_TRAP_UD	    (1 << 1)
@@ -1964,6 +1971,7 @@ u64 vcpu_tsc_khz(struct kvm_vcpu *vcpu);
 #define EMULTYPE_PF		    (1 << 6)
 #define EMULTYPE_COMPLETE_USER_EXIT (1 << 7)
 #define EMULTYPE_WRITE_PF_TO_SP	    (1 << 8)
+#define EMULTYPE_PVM_GP		    (1 << 9)
 
 int kvm_emulate_instruction(struct kvm_vcpu *vcpu, int emulation_type);
 int kvm_emulate_instruction_from_buffer(struct kvm_vcpu *vcpu,
