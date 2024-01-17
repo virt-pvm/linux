@@ -794,14 +794,27 @@ PV_CALLEE_SAVE_REGS_THUNK(__kvm_vcpu_is_preempted);
 
 extern bool __raw_callee_save___kvm_vcpu_is_preempted(long);
 
+#ifndef CONFIG_X86_PIE
+#define KVM_CHECK_VCPU_PREEMPTED			\
+	"movq	__per_cpu_offset(,%rdi,8), %rax;"	\
+	"cmpb	$0, " __stringify(KVM_STEAL_TIME_preempted) "+steal_time(%rax);"
+#else
+#define KVM_CHECK_VCPU_PREEMPTED			\
+	"pushq	%rdi;"					\
+	"leaq	__per_cpu_offset(%rip), %rax;"		\
+	"movq	(%rax,%rdi,8), %rax;"			\
+	"leaq	steal_time(%rip), %rdi;"		\
+	"cmpb	$0, (%rax, %rdi, 1);"			\
+	"popq	%rdi;"
+#endif
+
 /*
  * Hand-optimize version for x86-64 to avoid 8 64-bit register saving and
  * restoring to/from the stack.
  */
-#define PV_VCPU_PREEMPTED_ASM						     \
- "movq   __per_cpu_offset(,%rdi,8), %rax\n\t"				     \
- "cmpb   $0, " __stringify(KVM_STEAL_TIME_preempted) "+steal_time(%rax)\n\t" \
- "setne  %al\n\t"
+#define PV_VCPU_PREEMPTED_ASM		\
+	KVM_CHECK_VCPU_PREEMPTED	\
+	"setne  %al\n\t"
 
 DEFINE_PARAVIRT_ASM(__raw_callee_save___kvm_vcpu_is_preempted,
 		    PV_VCPU_PREEMPTED_ASM, .text);
