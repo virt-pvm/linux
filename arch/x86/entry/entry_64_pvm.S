@@ -201,3 +201,16 @@ SYM_CODE_START(pvm_kernel_event_entry)
 	jmp	.L_pvm_supervisor_iret
 .L_pvm_supervisor_iret_irq_enabled_end:
 SYM_CODE_END(pvm_kernel_event_entry)
+
+.pushsection .head.text, "ax"
+SYM_CODE_START_NOALIGN(pvm_early_kernel_event_entry)
+	UNWIND_HINT_ENTRY
+	ENDBR
+
+	incl	early_recursion_flag(%rip)
+	PUSH_IRET_FRAME_FROM_PVCS user=0
+	PUSH_REGS_AND_HANDLE_EVENT handler=pvm_early_event
+	decl	early_recursion_flag(%rip)
+	jmp	.L_pvm_supervisor_restore_regs_and_return
+SYM_CODE_END(pvm_early_kernel_event_entry)
+.popsection

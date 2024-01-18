@@ -13,6 +13,7 @@
 
 void pvm_relocate_kernel(struct boot_params *bp);
 void __init pvm_early_setup(void);
+void __init pvm_setup_early_traps(void);
 bool __init pvm_kernel_layout_relocate(void);
 
 static inline void pvm_cpuid(unsigned int *eax, unsigned int *ebx,
@@ -66,6 +67,10 @@ static inline void pvm_early_setup(void)
 {
 }
 
+static inline void pvm_setup_early_traps(void)
+{
+}
+
 static inline bool pvm_kernel_layout_relocate(void)
 {
 	return false;
@@ -75,6 +80,7 @@ static inline bool pvm_kernel_layout_relocate(void)
 void entry_SYSCALL_64_pvm(void);
 void pvm_user_event_entry(void);
 void pvm_retu_rip(void);
+void __init pvm_early_event(struct pt_regs *regs, u32 vector, u32 errcode);
 __visible noinstr void pvm_event(struct pt_regs *regs, u32 vector, u32 errcode);
 
 #endif /* !__ASSEMBLY__ */
