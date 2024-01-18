@@ -467,11 +467,19 @@ void fred_install_sysvec(unsigned int vector, const idtentry_t function);
 static inline void fred_install_sysvec(unsigned int vector, const idtentry_t function) { }
 #endif
 
+#ifdef CONFIG_PVM_GUEST
+void pvm_install_sysvec(unsigned int vector, const idtentry_t function);
+#else
+static inline void pvm_install_sysvec(unsigned int vector, const idtentry_t function) { }
+#endif
+
 #define sysvec_install(vector, function) {				\
-	if (cpu_feature_enabled(X86_FEATURE_FRED))			\
+	if (cpu_feature_enabled(X86_FEATURE_FRED)) {			\
 		fred_install_sysvec(vector, function);			\
-	else								\
+	} else {							\
 		idt_install_sysvec(vector, asm_##function);		\
+		pvm_install_sysvec(vector, function);			\
+	}								\
 }
 
 #else /* !__ASSEMBLY__ */

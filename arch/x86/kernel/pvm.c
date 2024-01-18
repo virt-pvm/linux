@@ -167,6 +167,15 @@ static idtentry_t pvm_sysvec_table[NR_SYSTEM_VECTORS] __ro_after_init = {
 #endif
 };
 
+void __init pvm_install_sysvec(unsigned int sysvec, const idtentry_t handler)
+{
+	if (WARN_ON_ONCE(sysvec < FIRST_SYSTEM_VECTOR))
+		return;
+	if (!WARN_ON_ONCE(pvm_sysvec_table[sysvec - FIRST_SYSTEM_VECTOR] !=
+			  pvm_handle_spurious_interrupt))
+		pvm_sysvec_table[sysvec - FIRST_SYSTEM_VECTOR] = handler;
+}
+
 /*
  * some pointers in pvm_sysvec_table are actual spurious_interrupt() who
  * expects the second argument to be the vector.
