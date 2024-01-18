@@ -17,12 +17,45 @@
 #include <asm/cpu_entry_area.h>
 #include <asm/desc.h>
 #include <asm/pvm_para.h>
+#include <asm/setup.h>
 #include <asm/traps.h>
 
 DEFINE_PER_CPU_PAGE_ALIGNED(struct pvm_vcpu_struct, pvm_vcpu_struct);
 
 unsigned long pvm_range_start __initdata;
 unsigned long pvm_range_end __initdata;
+
+static bool early_traps_setup __initdata;
+
+void __init pvm_early_event(struct pt_regs *regs)
+{
+	int vector = regs->orig_ax >> 32;
+
+	if (!early_traps_setup) {
+		do_early_exception(regs, vector);
+		return;
+	}
+
+	switch (vector) {
+	case X86_TRAP_DB:
+		exc_debug(regs);
+		return;
+	case X86_TRAP_BP:
+		exc_int3(regs);
+		return;
+	case X86_TRAP_PF:
+		exc_page_fault(regs, regs->orig_ax);
+		return;
+	default:
+		do_early_exception(regs, vector);
+		return;
+	}
+}
+
+void __init pvm_setup_early_traps(void)
+{
+	early_traps_setup = true;
+}
 
 static noinstr void pvm_bad_event(struct pt_regs *regs, unsigned long vector,
 				  unsigned long error_code)

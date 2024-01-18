@@ -633,6 +633,27 @@ SYM_CODE_START_NOALIGN(vc_no_ghcb)
 SYM_CODE_END(vc_no_ghcb)
 #endif
 
+#ifdef CONFIG_PVM_GUEST
+	.align 256
+SYM_CODE_START_NOALIGN(pvm_early_kernel_event_entry)
+	UNWIND_HINT_ENTRY
+	ENDBR
+
+	incl	early_recursion_flag(%rip)
+
+	/* set %rcx, %r11 per PVM event handling specification */
+	movq	6*8(%rsp), %rcx
+	movq	7*8(%rsp), %r11
+
+	PUSH_AND_CLEAR_REGS
+	movq	%rsp, %rdi	/* %rdi -> pt_regs */
+	call	pvm_early_event
+
+	decl	early_recursion_flag(%rip)
+	jmp	pvm_restore_regs_and_return_to_kernel
+SYM_CODE_END(pvm_early_kernel_event_entry)
+#endif
+
 #define SYM_DATA_START_PAGE_ALIGNED(name)			\
 	SYM_START(name, SYM_L_GLOBAL, .balign PAGE_SIZE)
 

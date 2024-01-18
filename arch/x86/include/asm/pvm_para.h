@@ -13,6 +13,7 @@ typedef void (*idtentry_t)(struct pt_regs *regs);
 #include <uapi/asm/kvm_para.h>
 
 void __init pvm_early_setup(void);
+void __init pvm_setup_early_traps(void);
 void __init pvm_install_sysvec(unsigned int sysvec, idtentry_t handler);
 bool __init pvm_kernel_layout_relocate(void);
 
@@ -67,6 +68,10 @@ static inline bool pvm_detect(void)
 }
 #else
 static inline void pvm_early_setup(void)
+{
+}
+
+static inline void pvm_setup_early_traps(void)
 {
 }
 
