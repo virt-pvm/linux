@@ -24,5 +24,6 @@ obj-$(CONFIG_X86_FRED)		+= entry_64_fred.o entry_fred.o
 
 obj-$(CONFIG_IA32_EMULATION)	+= entry_64_compat.o syscall_32.o
 obj-$(CONFIG_X86_X32_ABI)	+= syscall_x32.o
+obj-$(CONFIG_PVM_GUEST) 	+= entry_64_pvm.o
 
 obj-$(CONFIG_X86_64) 		+= entry_64_switcher.o

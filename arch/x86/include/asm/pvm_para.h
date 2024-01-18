@@ -5,6 +5,8 @@
 #include <linux/init.h>
 #include <uapi/asm/pvm_para.h>
 
+#ifndef __ASSEMBLY__
+
 #ifdef CONFIG_PVM_GUEST
 #include <asm/irqflags.h>
 #include <uapi/asm/kvm_para.h>
@@ -69,5 +71,12 @@ static inline bool pvm_kernel_layout_relocate(void)
 	return false;
 }
 #endif /* CONFIG_PVM_GUEST */
+
+void entry_SYSCALL_64_pvm(void);
+void pvm_user_event_entry(void);
+void pvm_retu_rip(void);
+__visible noinstr void pvm_event(struct pt_regs *regs, u32 vector, u32 errcode);
+
+#endif /* !__ASSEMBLY__ */
 
 #endif /* _ASM_X86_PVM_PARA_H */

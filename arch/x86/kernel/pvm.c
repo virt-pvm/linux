@@ -11,13 +11,202 @@
 #define pr_fmt(fmt) "pvm-guest: " fmt
 
 #include <linux/mm_types.h>
+#include <linux/nospec.h>
 
 #include <asm/cpufeature.h>
 #include <asm/cpu_entry_area.h>
+#include <asm/desc.h>
 #include <asm/pvm_para.h>
+#include <asm/traps.h>
+
+DEFINE_PER_CPU_PAGE_ALIGNED(struct pvm_vcpu_struct, pvm_vcpu_struct);
 
 unsigned long pvm_range_start __initdata;
 unsigned long pvm_range_end __initdata;
+
+static noinstr void pvm_bad_event(struct pt_regs *regs, unsigned long vector,
+				  unsigned long error_code)
+{
+	irqentry_state_t irq_state = irqentry_nmi_enter(regs);
+
+	instrumentation_begin();
+
+	/* Panic on events from supervisor mode */
+	if (!user_mode(regs)) {
+		pr_emerg("PANIC: invalid or fatal PVM event;"
+			 "vector %lu error 0x%lx at %04x:%016lx\n",
+			 vector, error_code, regs->cs, regs->ip);
+		die("invalid or fatal PVM event", regs, error_code);
+		panic("invalid or fatal PVM event");
+	} else {
+		unsigned long flags = oops_begin();
+		int sig = SIGKILL;
+
+		pr_alert("BUG: invalid or fatal FRED event;"
+			 "vector %lu error 0x%lx at %04x:%016lx\n",
+			 vector, error_code, regs->cs, regs->ip);
+
+		if (__die("Invalid or fatal FRED event", regs, error_code))
+			sig = 0;
+
+		oops_end(flags, regs, sig);
+	}
+	instrumentation_end();
+	irqentry_nmi_exit(regs, irq_state);
+}
+
+void pvm_exc_debug(struct pt_regs *regs);
+
+DEFINE_IDTENTRY_RAW(pvm_exc_debug)
+{
+	/*
+	 * There's no IST on PVM. but we still need to dispatch
+	 * to the correct handler.
+	 */
+	if (user_mode(regs))
+		noist_exc_debug(regs);
+	else
+		exc_debug(regs);
+}
+
+#ifdef CONFIG_X86_MCE
+void pvm_exc_machine_check(struct pt_regs *regs);
+
+DEFINE_IDTENTRY_RAW(pvm_exc_machine_check)
+{
+	/*
+	 * There's no IST on PVM, but we still need to dispatch
+	 * to the correct handler.
+	 */
+	if (user_mode(regs))
+		noist_exc_machine_check(regs);
+	else
+		exc_machine_check(regs);
+}
+#endif
+
+static noinstr void pvm_exception(struct pt_regs *regs, unsigned long vector,
+				  unsigned long error_code)
+{
+	switch (vector) {
+	case X86_TRAP_DE: return exc_divide_error(regs);
+	case X86_TRAP_DB: return pvm_exc_debug(regs);
+	case X86_TRAP_NMI: return exc_nmi(regs);
+	case X86_TRAP_BP: return exc_int3(regs);
+	case X86_TRAP_OF: return exc_overflow(regs);
+	case X86_TRAP_BR: return exc_bounds(regs);
+	case X86_TRAP_UD: return exc_invalid_op(regs);
+	case X86_TRAP_NM: return exc_device_not_available(regs);
+	case X86_TRAP_DF: return exc_double_fault(regs, error_code);
+	case X86_TRAP_TS: return exc_invalid_tss(regs, error_code);
+	case X86_TRAP_NP: return exc_segment_not_present(regs, error_code);
+	case X86_TRAP_SS: return exc_stack_segment(regs, error_code);
+	case X86_TRAP_GP: return exc_general_protection(regs, error_code);
+	case X86_TRAP_PF: return exc_page_fault(regs, error_code);
+	case X86_TRAP_MF: return exc_coprocessor_error(regs);
+	case X86_TRAP_AC: return exc_alignment_check(regs, error_code);
+	case X86_TRAP_XF: return exc_simd_coprocessor_error(regs);
+#ifdef CONFIG_X86_MCE
+	case X86_TRAP_MC: return pvm_exc_machine_check(regs);
+#endif
+#ifdef CONFIG_X86_CET
+	case X86_TRAP_CP: return exc_control_protection(regs, error_code);
+#endif
+	default: return pvm_bad_event(regs, vector, error_code);
+	}
+}
+
+static noinstr void pvm_handle_INT80_compat(struct pt_regs *regs)
+{
+#ifdef CONFIG_IA32_EMULATION
+	if (ia32_enabled()) {
+		int80_emulation(regs);
+		return;
+	}
+#endif
+	exc_general_protection(regs, 0);
+}
+
+#define SYSVEC(_vector, _function) [_vector - FIRST_SYSTEM_VECTOR] = sysvec_##_function
+
+#define pvm_handle_spurious_interrupt ((idtentry_t)(void *)spurious_interrupt)
+
+static idtentry_t pvm_sysvec_table[NR_SYSTEM_VECTORS] __ro_after_init = {
+	[0 ... NR_SYSTEM_VECTORS-1] = pvm_handle_spurious_interrupt,
+
+	SYSVEC(ERROR_APIC_VECTOR,		error_interrupt),
+	SYSVEC(SPURIOUS_APIC_VECTOR,		spurious_apic_interrupt),
+	SYSVEC(LOCAL_TIMER_VECTOR,		apic_timer_interrupt),
+	SYSVEC(X86_PLATFORM_IPI_VECTOR,		x86_platform_ipi),
+
+#ifdef CONFIG_SMP
+	SYSVEC(RESCHEDULE_VECTOR,		reschedule_ipi),
+	SYSVEC(CALL_FUNCTION_SINGLE_VECTOR,	call_function_single),
+	SYSVEC(CALL_FUNCTION_VECTOR,		call_function),
+	SYSVEC(REBOOT_VECTOR,			reboot),
+#endif
+#ifdef CONFIG_X86_MCE_THRESHOLD
+	SYSVEC(THRESHOLD_APIC_VECTOR,		threshold),
+#endif
+#ifdef CONFIG_X86_MCE_AMD
+	SYSVEC(DEFERRED_ERROR_VECTOR,		deferred_error),
+#endif
+#ifdef CONFIG_X86_THERMAL_VECTOR
+	SYSVEC(THERMAL_APIC_VECTOR,		thermal),
+#endif
+#ifdef CONFIG_IRQ_WORK
+	SYSVEC(IRQ_WORK_VECTOR,			irq_work),
+#endif
+#ifdef CONFIG_HAVE_KVM
+	SYSVEC(POSTED_INTR_VECTOR,		kvm_posted_intr_ipi),
+	SYSVEC(POSTED_INTR_WAKEUP_VECTOR,	kvm_posted_intr_wakeup_ipi),
+	SYSVEC(POSTED_INTR_NESTED_VECTOR,	kvm_posted_intr_nested_ipi),
+#endif
+#ifdef CONFIG_X86_POSTED_MSI
+	SYSVEC(POSTED_MSI_NOTIFICATION_VECTOR,	posted_msi_notification),
+#endif
+};
+
+/*
+ * some pointers in pvm_sysvec_table are actual spurious_interrupt() who
+ * expects the second argument to be the vector.
+ */
+typedef void (*idtentry_x_t)(struct pt_regs *regs, int vector);
+
+static __always_inline void pvm_handle_sysvec(struct pt_regs *regs, unsigned long vector)
+{
+	unsigned int index = array_index_nospec(vector - FIRST_SYSTEM_VECTOR,
+						NR_SYSTEM_VECTORS);
+	idtentry_x_t func = (void *)pvm_sysvec_table[index];
+
+	func(regs, vector);
+}
+
+__visible noinstr void pvm_event(struct pt_regs *regs, u32 vector, u32 errcode)
+{
+	/* Optimize for #PF. */
+	if (likely(vector == (PVM_PVCS_EVENT_VECTOR_STD | X86_TRAP_PF)))
+		return exc_page_fault(regs, errcode);
+
+	if (unlikely(vector & (PVM_PVCS_EVENT_VECTOR_NMI | PVM_PVCS_EVENT_VECTOR_MCE))) {
+		if (vector & PVM_PVCS_EVENT_VECTOR_MCE)
+			pvm_exception(regs, X86_TRAP_MC, 0);
+		if (vector & PVM_PVCS_EVENT_VECTOR_NMI)
+			pvm_exception(regs, X86_TRAP_NMI, 0);
+	}
+	if (!likely(vector & PVM_PVCS_EVENT_VECTOR_STD))
+		return;
+
+	vector &= 0xFF;
+	if (vector >= FIRST_SYSTEM_VECTOR)
+		pvm_handle_sysvec(regs, vector);
+	else if (vector < NUM_EXCEPTION_VECTORS)
+		pvm_exception(regs, vector, errcode);
+	else if (unlikely(vector == IA32_SYSCALL_VECTOR))
+		pvm_handle_INT80_compat(regs);
+	else
+		common_interrupt(regs, vector);
+}
 
 void __init pvm_early_setup(void)
 {
