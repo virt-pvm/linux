@@ -128,8 +128,6 @@ static noinstr void pvm_handle_INT80_compat(struct pt_regs *regs)
 	exc_general_protection(regs, 0);
 }
 
-typedef void (*idtentry_t)(struct pt_regs *regs);
-
 #define SYSVEC(_vector, _function) [_vector - FIRST_SYSTEM_VECTOR] = sysvec_##_function
 
 #define pvm_handle_spurious_interrupt ((idtentry_t)(void *)spurious_interrupt)
@@ -166,6 +164,15 @@ static idtentry_t pvm_sysvec_table[NR_SYSTEM_VECTORS] __ro_after_init = {
 	SYSVEC(POSTED_INTR_NESTED_VECTOR,	kvm_posted_intr_nested_ipi),
 #endif
 };
+
+void __init pvm_install_sysvec(unsigned int sysvec, idtentry_t handler)
+{
+	if (WARN_ON_ONCE(sysvec < FIRST_SYSTEM_VECTOR))
+		return;
+	if (!WARN_ON_ONCE(pvm_sysvec_table[sysvec - FIRST_SYSTEM_VECTOR] !=
+			  pvm_handle_spurious_interrupt))
+		pvm_sysvec_table[sysvec - FIRST_SYSTEM_VECTOR] = handler;
+}
 
 /*
  * some pointers in pvm_sysvec_table are actual spurious_interrupt() who

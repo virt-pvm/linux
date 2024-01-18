@@ -6,12 +6,14 @@
 #include <uapi/asm/pvm_para.h>
 
 #ifndef __ASSEMBLY__
+typedef void (*idtentry_t)(struct pt_regs *regs);
 
 #ifdef CONFIG_PVM_GUEST
 #include <asm/irqflags.h>
 #include <uapi/asm/kvm_para.h>
 
 void __init pvm_early_setup(void);
+void __init pvm_install_sysvec(unsigned int sysvec, idtentry_t handler);
 bool __init pvm_kernel_layout_relocate(void);
 
 static inline void pvm_cpuid(unsigned int *eax, unsigned int *ebx,
@@ -65,6 +67,10 @@ static inline bool pvm_detect(void)
 }
 #else
 static inline void pvm_early_setup(void)
+{
+}
+
+static inline void pvm_install_sysvec(unsigned int sysvec, idtentry_t handler)
 {
 }
 
