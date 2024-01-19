@@ -396,6 +396,12 @@ static void __head detect_pvm_range(void)
 	pml4_index_end = (msr_val >> 16) & 0x1ff;
 	pvm_range_start = (0x1fffe00 | pml4_index_start) * P4D_SIZE;
 	pvm_range_end = (0x1fffe00 | pml4_index_end) * P4D_SIZE;
+
+	/*
+	 * early page fault would map page into directing mapping area,
+	 * so we should modify 'page_offset_base' here early.
+	 */
+	page_offset_base = pvm_range_start;
 }
 
 void __head pvm_relocate_kernel(unsigned long physbase)

@@ -28,6 +28,7 @@
 
 #include <asm/setup.h>
 #include <asm/kaslr.h>
+#include <asm/pvm_para.h>
 
 #include "mm_internal.h"
 
@@ -81,6 +82,9 @@ void __init kernel_randomize_memory(void)
 	BUILD_BUG_ON(vaddr_start >= vaddr_end);
 	BUILD_BUG_ON(vaddr_end != RAW_CPU_ENTRY_AREA_BASE);
 	BUILD_BUG_ON(vaddr_end > __START_KERNEL_map);
+
+	if (pvm_kernel_layout_relocate())
+		return;
 
 	if (!kaslr_memory_enabled())
 		return;
