@@ -27,6 +27,52 @@ unsigned long pvm_range_end __initdata;
 
 static bool early_traps_setup __initdata;
 
+static __always_inline long pvm_hypercall0(unsigned int nr)
+{
+	long ret;
+
+	asm volatile("call pvm_hypercall"
+		     : "=a"(ret)
+		     : "a"(nr)
+		     : "memory");
+	return ret;
+}
+
+static __always_inline long pvm_hypercall1(unsigned int nr, unsigned long p1)
+{
+	long ret;
+
+	asm volatile("call pvm_hypercall"
+		     : "=a"(ret)
+		     : "a"(nr), "b"(p1)
+		     : "memory");
+	return ret;
+}
+
+static __always_inline long pvm_hypercall2(unsigned int nr, unsigned long p1,
+					   unsigned long p2)
+{
+	long ret;
+
+	asm volatile("call pvm_hypercall"
+		     : "=a"(ret)
+		     : "a"(nr), "b"(p1), "c"(p2)
+		     : "memory");
+	return ret;
+}
+
+static __always_inline long pvm_hypercall3(unsigned int nr, unsigned long p1,
+					   unsigned long p2, unsigned long p3)
+{
+	long ret;
+
+	asm volatile("call pvm_hypercall"
+		     : "=a"(ret)
+		     : "a"(nr), "b"(p1), "c"(p2), "d"(p3)
+		     : "memory");
+	return ret;
+}
+
 void __init pvm_early_event(struct pt_regs *regs)
 {
 	int vector = regs->orig_ax >> 32;

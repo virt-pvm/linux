@@ -52,6 +52,21 @@ SYM_CODE_START(entry_SYSCALL_64_pvm)
 	jmp	entry_SYSCALL_64_after_hwframe
 SYM_CODE_END(entry_SYSCALL_64_pvm)
 
+.pushsection .noinstr.text, "ax"
+SYM_FUNC_START(pvm_hypercall)
+	push	%r11
+	push	%r10
+	movq	%rcx, %r10
+	UNWIND_HINT_SAVE
+	syscall
+	UNWIND_HINT_RESTORE
+	movq	%r10, %rcx
+	popq	%r10
+	popq	%r11
+	RET
+SYM_FUNC_END(pvm_hypercall)
+.popsection
+
 /*
  * The new RIP value that PVM event delivery establishes is
  * MSR_PVM_EVENT_ENTRY for vector events that occur in user mode.

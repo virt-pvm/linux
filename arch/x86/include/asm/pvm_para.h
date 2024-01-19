@@ -87,6 +87,7 @@ static inline bool pvm_kernel_layout_relocate(void)
 
 void entry_SYSCALL_64_pvm(void);
 void pvm_user_event_entry(void);
+void pvm_hypercall(void);
 void pvm_retu_rip(void);
 void pvm_rets_rip(void);
 #endif /* !__ASSEMBLY__ */
