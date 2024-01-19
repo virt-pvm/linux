@@ -127,9 +127,8 @@ SYM_INNER_LABEL(entry_SYSCALL_64_after_hwframe, SYM_L_GLOBAL)
 	 * In the PVM guest case we must use eretu synthetic instruction.
 	 */
 
-	ALTERNATIVE_2 "testb %al, %al; jz swapgs_restore_regs_and_return_to_usermode", \
-		"jmp swapgs_restore_regs_and_return_to_usermode", X86_FEATURE_XENPV, \
-		"jmp swapgs_restore_regs_and_return_to_usermode", X86_FEATURE_KVM_PVM_GUEST
+	ALTERNATIVE "testb %al, %al; jz swapgs_restore_regs_and_return_to_usermode", \
+		"jmp swapgs_restore_regs_and_return_to_usermode", X86_FEATURE_PV_GUEST
 
 	/*
 	 * We win! This label is here just for ease of understanding

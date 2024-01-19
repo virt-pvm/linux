@@ -335,6 +335,7 @@ static bool __init xen_check_xsave(void)
 static void __init xen_init_capabilities(void)
 {
 	setup_force_cpu_cap(X86_FEATURE_XENPV);
+	setup_force_cpu_cap(X86_FEATURE_PV_GUEST);
 	setup_clear_cpu_cap(X86_FEATURE_DCA);
 	setup_clear_cpu_cap(X86_FEATURE_APERFMPERF);
 	setup_clear_cpu_cap(X86_FEATURE_MTRR);

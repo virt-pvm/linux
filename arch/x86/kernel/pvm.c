@@ -300,6 +300,7 @@ void __init pvm_early_setup(void)
 		return;
 
 	setup_force_cpu_cap(X86_FEATURE_KVM_PVM_GUEST);
+	setup_force_cpu_cap(X86_FEATURE_PV_GUEST);
 
 	wrmsrl(MSR_PVM_VCPU_STRUCT, __pa(this_cpu_ptr(&pvm_vcpu_struct)));
 	wrmsrl(MSR_PVM_EVENT_ENTRY, (unsigned long)(void *)pvm_early_kernel_event_entry - 256);
