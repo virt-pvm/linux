@@ -84,6 +84,13 @@ void __init pti_check_boottime_disable(void)
 		return;
 	}
 
+	if (boot_cpu_has(X86_FEATURE_KVM_PVM_GUEST)) {
+		pti_mode = PTI_FORCE_ON;
+		pti_print_if_insecure("force enabled on kvm pvm guest.");
+		setup_force_cpu_cap(X86_FEATURE_PTI);
+		return;
+	}
+
 	if (cpu_mitigations_off())
 		pti_mode = PTI_FORCE_OFF;
 	if (pti_mode == PTI_FORCE_OFF) {
