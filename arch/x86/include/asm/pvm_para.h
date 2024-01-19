@@ -79,6 +79,7 @@ static inline bool pvm_kernel_layout_relocate(void)
 
 void entry_SYSCALL_64_pvm(void);
 void pvm_user_event_entry(void);
+void pvm_hypercall(void);
 void pvm_retu_rip(void);
 void __init pvm_early_event(struct pt_regs *regs, u32 vector, u32 errcode);
 __visible noinstr void pvm_event(struct pt_regs *regs, u32 vector, u32 errcode);
