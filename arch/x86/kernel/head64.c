@@ -88,6 +88,9 @@ static inline bool check_la57_support(void)
 	if (!IS_ENABLED(CONFIG_X86_5LEVEL))
 		return false;
 
+	if (RIP_REL_REF(__pgtable_l5_enabled))
+		return true;
+
 	/*
 	 * 5-level paging is detected and enabled at kernel decompression
 	 * stage. Only check if it has been enabled there.
@@ -677,13 +680,35 @@ extern unsigned long pvm_range_end;
 static void __head detect_pvm_range(void)
 {
 	unsigned long msr_val;
-	unsigned long pml4_index_start, pml4_index_end;
+	unsigned long index_start, index_end;
 
 	msr_val = __rdmsr(MSR_PVM_LINEAR_ADDRESS_RANGE);
-	pml4_index_start = msr_val & 0x1ff;
-	pml4_index_end = (msr_val >> 16) & 0x1ff;
-	pvm_range_start = (0x1fffe00 | pml4_index_start) * P4D_SIZE;
-	pvm_range_end = (0x1fffe00 | pml4_index_end) * P4D_SIZE;
+
+	if (check_la57_support()) {
+		index_start = (msr_val >> 32) & 0x1ff;
+		index_end = (msr_val >> 48) & 0x1ff;
+		pvm_range_start = (0xfe00 | index_start) * PGDIR_SIZE;
+		pvm_range_end = (0xfe00 | index_end) * PGDIR_SIZE;
+	} else {
+		index_start = msr_val & 0x1ff;
+		index_end = (msr_val >> 16) & 0x1ff;
+		pvm_range_start = (0x1fffe00 | index_start) * P4D_SIZE;
+		pvm_range_end = (0x1fffe00 | index_end) * P4D_SIZE;
+
+		/*
+		 * If the host is in 5-level paging mode and the guest is in
+		 * 4-level paging mode, clear the L5 range for migration.
+		 */
+		if (((msr_val >> 32) & 0x1ff) != 0x1ff)
+			msr_val |= (0x1ffUL << 32) | (0x1ffUL << 48);
+	}
+	native_wrmsrl(MSR_PVM_LINEAR_ADDRESS_RANGE, msr_val);
+
+	/*
+	 * early page fault would map page into directing mapping area,
+	 * so we should modify 'page_offset_base' here early.
+	 */
+	page_offset_base = pvm_range_start;
 }
 
 void __head pvm_relocate_kernel(struct boot_params *bp)

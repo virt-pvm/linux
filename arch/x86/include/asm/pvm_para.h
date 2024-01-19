@@ -11,6 +11,7 @@
 
 void pvm_relocate_kernel(struct boot_params *bp);
 void __init pvm_early_setup(void);
+bool __init pvm_kernel_layout_relocate(void);
 
 static inline void pvm_cpuid(unsigned int *eax, unsigned int *ebx,
 			     unsigned int *ecx, unsigned int *edx)
@@ -61,6 +62,11 @@ static inline bool pvm_detect(void)
 #else
 static inline void pvm_early_setup(void)
 {
+}
+
+static inline bool pvm_kernel_layout_relocate(void)
+{
+	return false;
 }
 #endif /* CONFIG_PVM_GUEST */
 
