@@ -2,6 +2,7 @@
 #ifndef _ASM_X86_KVM_PARA_H
 #define _ASM_X86_KVM_PARA_H
 
+#include <asm/pvm_para.h>
 #include <asm/processor.h>
 #include <asm/alternative.h>
 #include <linux/interrupt.h>
@@ -18,8 +19,14 @@ static inline bool kvm_check_and_clear_guest_paused(void)
 }
 #endif /* CONFIG_KVM_GUEST */
 
+#ifdef CONFIG_PVM_GUEST
+#define KVM_HYPERCALL \
+	ALTERNATIVE_2("vmcall", "vmmcall", X86_FEATURE_VMMCALL, \
+		      "call pvm_hypercall", X86_FEATURE_KVM_PVM_GUEST)
+#else
 #define KVM_HYPERCALL \
         ALTERNATIVE("vmcall", "vmmcall", X86_FEATURE_VMMCALL)
+#endif /* CONFIG_PVM_GUEST */
 
 /* For KVM hypercalls, a three-byte sequence of either the vmcall or the vmmcall
  * instruction.  The hypervisor may replace it with something else but only the
