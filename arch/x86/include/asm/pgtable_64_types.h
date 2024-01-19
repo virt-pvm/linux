@@ -140,6 +140,7 @@ extern unsigned int ptrs_per_p4d;
 # define VMEMMAP_START		__VMEMMAP_BASE_L4
 #endif /* CONFIG_DYNAMIC_MEMORY_LAYOUT */
 
+#ifndef CONFIG_PVM_GUEST
 /*
  * End of the region for which vmalloc page tables are pre-allocated.
  * For non-KMSAN builds, this is the same as VMALLOC_END.
@@ -147,6 +148,10 @@ extern unsigned int ptrs_per_p4d;
  * VMALLOC_START..VMALLOC_END (see below).
  */
 #define VMEMORY_END		(VMALLOC_START + (VMALLOC_SIZE_TB << 40) - 1)
+#else
+#define RAW_VMEMORY_END		(__VMALLOC_BASE_L4 + (VMALLOC_SIZE_TB_L4 << 40) - 1)
+#define VMEMORY_END		vmemory_end
+#endif /* CONFIG_PVM_GUEST */
 
 #ifndef CONFIG_KMSAN
 #define VMALLOC_END		VMEMORY_END
@@ -166,7 +171,7 @@ extern unsigned int ptrs_per_p4d;
  *              KMSAN_MODULES_ORIGIN_START to
  *              KMSAN_MODULES_ORIGIN_START + MODULES_LEN - origins for modules.
  */
-#define VMALLOC_QUARTER_SIZE	((VMALLOC_SIZE_TB << 40) >> 2)
+#define VMALLOC_QUARTER_SIZE	((VMEMORY_END + 1 - VMALLOC_START) >> 2)
 #define VMALLOC_END		(VMALLOC_START + VMALLOC_QUARTER_SIZE - 1)
 
 /*
@@ -202,7 +207,12 @@ extern unsigned int ptrs_per_p4d;
 #define ESPFIX_BASE_ADDR	(ESPFIX_PGD_ENTRY << P4D_SHIFT)
 
 #define CPU_ENTRY_AREA_PGD	_AC(-4, UL)
-#define CPU_ENTRY_AREA_BASE	(CPU_ENTRY_AREA_PGD << P4D_SHIFT)
+#define RAW_CPU_ENTRY_AREA_BASE	(CPU_ENTRY_AREA_PGD << P4D_SHIFT)
+#ifdef CONFIG_PVM_GUEST
+#define CPU_ENTRY_AREA_BASE	cpu_entry_area_base
+#else
+#define CPU_ENTRY_AREA_BASE	RAW_CPU_ENTRY_AREA_BASE
+#endif
 
 #define EFI_VA_START		( -4 * (_AC(1, UL) << 30))
 #define EFI_VA_END		(-68 * (_AC(1, UL) << 30))
