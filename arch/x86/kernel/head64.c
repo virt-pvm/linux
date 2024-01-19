@@ -76,6 +76,13 @@ unsigned long kernel_map_base __ro_after_init = __START_KERNEL_map;
 EXPORT_SYMBOL(kernel_map_base);
 #endif
 
+#ifdef CONFIG_PVM_GUEST
+unsigned long cpu_entry_area_base __ro_after_init = RAW_CPU_ENTRY_AREA_BASE;
+EXPORT_SYMBOL(cpu_entry_area_base);
+unsigned long vmemory_end __ro_after_init = RAW_VMEMORY_END;
+EXPORT_SYMBOL(vmemory_end);
+#endif
+
 static inline bool check_la57_support(void)
 {
 	if (!IS_ENABLED(CONFIG_X86_5LEVEL))

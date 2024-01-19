@@ -88,7 +88,7 @@ void __init kernel_randomize_memory(void)
 	 * with the vaddr_start/vaddr_end variables. These checks are very
 	 * limited....
 	 */
-	BUILD_BUG_ON(VADDR_END_L5 > CPU_ENTRY_AREA_BASE);
+	BUILD_BUG_ON(VADDR_END_L5 > RAW_CPU_ENTRY_AREA_BASE);
 	BUILD_BUG_ON(vaddr_end > __START_KERNEL_map);
 
 	/* Preset the end of the possible address space for physical memory */
