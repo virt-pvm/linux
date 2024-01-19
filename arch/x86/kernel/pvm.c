@@ -298,12 +298,39 @@ __visible noinstr void pvm_event(struct pt_regs *regs, u32 vector, u32 errcode)
 		common_interrupt(regs, vector);
 }
 
+extern void pvm_early_kernel_event_entry(void);
+
 void __init pvm_early_setup(void)
 {
 	if (!pvm_range_end)
 		return;
 
 	setup_force_cpu_cap(X86_FEATURE_KVM_PVM_GUEST);
+
+	wrmsrl(MSR_PVM_VCPU_STRUCT, __pa(this_cpu_ptr(&pvm_vcpu_struct)));
+	wrmsrl(MSR_PVM_EVENT_ENTRY, (unsigned long)(void *)pvm_early_kernel_event_entry - 512);
+}
+
+void pvm_setup_event_handling(void)
+{
+	if (boot_cpu_has(X86_FEATURE_KVM_PVM_GUEST)) {
+		u64 xpa = slow_virt_to_phys(this_cpu_ptr(&pvm_vcpu_struct));
+
+		wrmsrl(MSR_PVM_VCPU_STRUCT, xpa);
+		wrmsrl(MSR_PVM_EVENT_ENTRY, (unsigned long)(void *)pvm_user_event_entry);
+		wrmsrl(MSR_PVM_RETU_RIP, (unsigned long)(void *)pvm_retu_rip);
+
+		/*
+		 * PVM spec requires the hypervisor-maintained
+		 * MSR_KERNEL_GS_BASE to be the same as the kernel GSBASE for
+		 * event delivery for user mode. wrmsrl(MSR_KERNEL_GS_BASE)
+		 * accesses only the user GSBASE in the PVCS via
+		 * pvm_write_msr() without hypervisor involved, so use
+		 * PVM_HC_WRMSR instead.
+		 */
+		pvm_hypercall2(PVM_HC_WRMSR, MSR_KERNEL_GS_BASE,
+			       cpu_kernelmode_gs_base(smp_processor_id()));
+	}
 }
 
 #define TB_SHIFT	40
