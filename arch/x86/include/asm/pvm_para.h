@@ -95,6 +95,9 @@ void pvm_user_event_entry(void);
 void pvm_hypercall(void);
 void pvm_retu_rip(void);
 void pvm_rets_rip(void);
+void pvm_save_fl(void);
+void pvm_irq_disable(void);
+void pvm_irq_enable(void);
 #endif /* !__ASSEMBLY__ */
 
 #endif /* _ASM_X86_PVM_PARA_H */

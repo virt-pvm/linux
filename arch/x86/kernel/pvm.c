@@ -148,6 +148,11 @@ static void pvm_load_tls(struct thread_struct *t, unsigned int cpu)
 	}
 }
 
+static noinstr void pvm_safe_halt(void)
+{
+	pvm_hypercall0(PVM_HC_IRQ_HALT);
+}
+
 void __init pvm_early_event(struct pt_regs *regs)
 {
 	int vector = regs->orig_ax >> 32;
@@ -386,6 +391,11 @@ void __init pvm_early_setup(void)
 	pv_ops.cpu.read_msr_safe = pvm_read_msr_safe;
 	pv_ops.cpu.write_msr_safe = pvm_write_msr_safe;
 	pv_ops.cpu.load_tls = pvm_load_tls;
+
+	pv_ops.irq.save_fl = __PV_IS_CALLEE_SAVE(pvm_save_fl);
+	pv_ops.irq.irq_disable = __PV_IS_CALLEE_SAVE(pvm_irq_disable);
+	pv_ops.irq.irq_enable = __PV_IS_CALLEE_SAVE(pvm_irq_enable);
+	pv_ops.irq.safe_halt = pvm_safe_halt;
 
 	wrmsrl(MSR_PVM_VCPU_STRUCT, __pa(this_cpu_ptr(&pvm_vcpu_struct)));
 	wrmsrl(MSR_PVM_EVENT_ENTRY, (unsigned long)(void *)pvm_early_kernel_event_entry - 256);
