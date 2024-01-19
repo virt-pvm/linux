@@ -413,6 +413,34 @@ __visible noinstr void pvm_event(struct pt_regs *regs)
 		common_interrupt(regs, vector);
 }
 
+asm (
+	".pushsection .rodata				\n"
+	".global pvm_cmpxchg16b_emu_template		\n"
+	"pvm_cmpxchg16b_emu_template:			\n"
+	"	cmpxchg16b %gs:(%rsi)			\n"
+	"	ret					\n"
+	".global pvm_cmpxchg16b_emu_tail		\n"
+	"pvm_cmpxchg16b_emu_tail:			\n"
+	".popsection					\n"
+);
+
+extern u8 this_cpu_cmpxchg16b_emu[];
+extern u8 pvm_cmpxchg16b_emu_template[];
+extern u8 pvm_cmpxchg16b_emu_tail[];
+
+static void __init pvm_early_patch(void)
+{
+	/*
+	 * The pushf/popf instructions in this_cpu_cmpxchg16b_emu() are
+	 * non-privilege instructions, so they cannot be trapped and emulated,
+	 * which could cause a boot failure. However, since the cmpxchg16b
+	 * instruction is supported for PVM guest. we can patch
+	 * this_cpu_cmpxchg16b_emu() and use cmpxchg16b directly.
+	 */
+	memcpy(this_cpu_cmpxchg16b_emu, pvm_cmpxchg16b_emu_template,
+	       (unsigned int)(pvm_cmpxchg16b_emu_tail - pvm_cmpxchg16b_emu_template));
+}
+
 extern void pvm_early_kernel_event_entry(void);
 
 /*
@@ -457,6 +485,8 @@ void __init pvm_early_setup(void)
 	wrmsrl(MSR_PVM_EVENT_ENTRY, (unsigned long)(void *)pvm_early_kernel_event_entry - 256);
 	wrmsrl(MSR_PVM_SUPERVISOR_REDZONE, PVM_SUPERVISOR_REDZONE_SIZE);
 	wrmsrl(MSR_PVM_RETS_RIP, (unsigned long)(void *)pvm_rets_rip);
+
+	pvm_early_patch();
 }
 
 void pvm_setup_event_handling(void)
