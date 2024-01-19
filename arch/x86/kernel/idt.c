@@ -12,6 +12,7 @@
 #include <asm/hw_irq.h>
 #include <asm/ia32.h>
 #include <asm/idtentry.h>
+#include <asm/pvm_para.h>
 
 #define DPL0		0x0
 #define DPL3		0x3
@@ -259,6 +260,7 @@ void __init idt_setup_early_pf(void)
 {
 	idt_setup_from_table(idt_table, early_pf_idts,
 			     ARRAY_SIZE(early_pf_idts), true);
+	pvm_setup_early_traps();
 }
 #endif
 

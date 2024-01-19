@@ -124,10 +124,12 @@ SYM_INNER_LABEL(entry_SYSCALL_64_after_hwframe, SYM_L_GLOBAL)
 	 * a completely clean 64-bit userspace context.  If we're not,
 	 * go to the slow exit path.
 	 * In the Xen PV case we must use iret anyway.
+	 * In the PVM guest case we must use eretu synthetic instruction.
 	 */
 
-	ALTERNATIVE "testb %al, %al; jz swapgs_restore_regs_and_return_to_usermode", \
-		"jmp swapgs_restore_regs_and_return_to_usermode", X86_FEATURE_XENPV
+	ALTERNATIVE_2 "testb %al, %al; jz swapgs_restore_regs_and_return_to_usermode", \
+		"jmp swapgs_restore_regs_and_return_to_usermode", X86_FEATURE_XENPV, \
+		"jmp swapgs_restore_regs_and_return_to_usermode", X86_FEATURE_KVM_PVM_GUEST
 
 	/*
 	 * We win! This label is here just for ease of understanding
@@ -596,6 +598,9 @@ SYM_INNER_LABEL(swapgs_restore_regs_and_return_to_usermode, SYM_L_GLOBAL)
 #endif
 #ifdef CONFIG_XEN_PV
 	ALTERNATIVE "", "jmp xenpv_restore_regs_and_return_to_usermode", X86_FEATURE_XENPV
+#endif
+#ifdef CONFIG_PVM_GUEST
+	ALTERNATIVE "", "jmp pvm_restore_regs_and_return_to_usermode", X86_FEATURE_KVM_PVM_GUEST
 #endif
 
 	POP_REGS pop_rdi=0

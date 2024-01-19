@@ -66,6 +66,7 @@
 #include <asm/set_memory.h>
 #include <asm/traps.h>
 #include <asm/sev.h>
+#include <asm/pvm_para.h>
 
 #include "cpu.h"
 
@@ -2066,7 +2067,15 @@ static void wrmsrl_cstar(unsigned long val)
 void syscall_init(void)
 {
 	wrmsr(MSR_STAR, 0, (__USER32_CS << 16) | __KERNEL_CS);
+
+#ifdef CONFIG_PVM_GUEST
+	if (boot_cpu_has(X86_FEATURE_KVM_PVM_GUEST))
+		wrmsrl(MSR_LSTAR, (unsigned long)entry_SYSCALL_64_pvm);
+	else
+		wrmsrl(MSR_LSTAR, (unsigned long)entry_SYSCALL_64);
+#else
 	wrmsrl(MSR_LSTAR, (unsigned long)entry_SYSCALL_64);
+#endif
 
 	if (ia32_enabled()) {
 		wrmsrl_cstar((unsigned long)entry_SYSCALL_compat);
@@ -2217,6 +2226,8 @@ void cpu_init_exception_handling(void)
 
 	/* Finally load the IDT */
 	load_current_idt();
+
+	pvm_setup_event_handling();
 }
 
 /*
