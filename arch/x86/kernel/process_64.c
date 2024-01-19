@@ -157,7 +157,7 @@ enum which_selector {
  * traced or probed than any access to a per CPU variable happens with
  * the wrong GS.
  *
- * It is not used on Xen paravirt. When paravirt support is needed, it
+ * It is not used on Xen/PVM paravirt. When paravirt support is needed, it
  * needs to be renamed with native_ prefix.
  */
 static noinstr unsigned long __rdgsbase_inactive(void)
@@ -166,7 +166,8 @@ static noinstr unsigned long __rdgsbase_inactive(void)
 
 	lockdep_assert_irqs_disabled();
 
-	if (!cpu_feature_enabled(X86_FEATURE_XENPV)) {
+	if (!cpu_feature_enabled(X86_FEATURE_XENPV) &&
+	    !cpu_feature_enabled(X86_FEATURE_KVM_PVM_GUEST)) {
 		native_swapgs();
 		gsbase = rdgsbase();
 		native_swapgs();
@@ -184,14 +185,15 @@ static noinstr unsigned long __rdgsbase_inactive(void)
  * traced or probed than any access to a per CPU variable happens with
  * the wrong GS.
  *
- * It is not used on Xen paravirt. When paravirt support is needed, it
+ * It is not used on Xen/PVM paravirt. When paravirt support is needed, it
  * needs to be renamed with native_ prefix.
  */
 static noinstr void __wrgsbase_inactive(unsigned long gsbase)
 {
 	lockdep_assert_irqs_disabled();
 
-	if (!cpu_feature_enabled(X86_FEATURE_XENPV)) {
+	if (!cpu_feature_enabled(X86_FEATURE_XENPV) &&
+	    !cpu_feature_enabled(X86_FEATURE_KVM_PVM_GUEST)) {
 		native_swapgs();
 		wrgsbase(gsbase);
 		native_swapgs();
