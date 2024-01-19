@@ -21,6 +21,7 @@
 #include <asm/traps.h>
 
 DEFINE_PER_CPU_PAGE_ALIGNED(struct pvm_vcpu_struct, pvm_vcpu_struct);
+static DEFINE_PER_CPU(unsigned long, pvm_guest_cr3);
 
 unsigned long pvm_range_start __initdata;
 unsigned long pvm_range_end __initdata;
@@ -151,6 +152,52 @@ static void pvm_load_tls(struct thread_struct *t, unsigned int cpu)
 static noinstr void pvm_safe_halt(void)
 {
 	pvm_hypercall0(PVM_HC_IRQ_HALT);
+}
+
+static noinstr unsigned long pvm_read_cr2(void)
+{
+	return this_cpu_read(pvm_vcpu_struct.cr2);
+}
+
+static noinstr void pvm_write_cr2(unsigned long cr2)
+{
+	native_write_cr2(cr2);
+	this_cpu_write(pvm_vcpu_struct.cr2, cr2);
+}
+
+static unsigned long pvm_read_cr3(void)
+{
+	return this_cpu_read(pvm_guest_cr3);
+}
+
+static unsigned long pvm_user_pgd(unsigned long pgd)
+{
+	return pgd | BIT(PTI_PGTABLE_SWITCH_BIT) | BIT(X86_CR3_PTI_PCID_USER_BIT);
+}
+
+static void pvm_write_cr3(unsigned long val)
+{
+	/* Convert CR3_NO_FLUSH bit to hypercall flags. */
+	unsigned long flags = ~val >> 63;
+	unsigned long pgd = val & ~X86_CR3_PCID_NOFLUSH;
+
+	this_cpu_write(pvm_guest_cr3, pgd);
+	pvm_hypercall3(PVM_HC_LOAD_PGTBL, flags, pgd, pvm_user_pgd(pgd));
+}
+
+static void pvm_flush_tlb_user(void)
+{
+	pvm_hypercall0(PVM_HC_TLB_FLUSH_CURRENT);
+}
+
+static void pvm_flush_tlb_kernel(void)
+{
+	pvm_hypercall0(PVM_HC_TLB_FLUSH);
+}
+
+static void pvm_flush_tlb_one_user(unsigned long addr)
+{
+	pvm_hypercall1(PVM_HC_TLB_INVLPG, addr);
 }
 
 void __init pvm_early_event(struct pt_regs *regs)
@@ -396,6 +443,15 @@ void __init pvm_early_setup(void)
 	pv_ops.irq.irq_disable = __PV_IS_CALLEE_SAVE(pvm_irq_disable);
 	pv_ops.irq.irq_enable = __PV_IS_CALLEE_SAVE(pvm_irq_enable);
 	pv_ops.irq.safe_halt = pvm_safe_halt;
+
+	this_cpu_write(pvm_guest_cr3, __native_read_cr3());
+	pv_ops.mmu.read_cr2 = __PV_IS_CALLEE_SAVE(pvm_read_cr2);
+	pv_ops.mmu.write_cr2 = pvm_write_cr2;
+	pv_ops.mmu.read_cr3 = pvm_read_cr3;
+	pv_ops.mmu.write_cr3 = pvm_write_cr3;
+	pv_ops.mmu.flush_tlb_user = pvm_flush_tlb_user;
+	pv_ops.mmu.flush_tlb_kernel = pvm_flush_tlb_kernel;
+	pv_ops.mmu.flush_tlb_one_user = pvm_flush_tlb_one_user;
 
 	wrmsrl(MSR_PVM_VCPU_STRUCT, __pa(this_cpu_ptr(&pvm_vcpu_struct)));
 	wrmsrl(MSR_PVM_EVENT_ENTRY, (unsigned long)(void *)pvm_early_kernel_event_entry - 256);
