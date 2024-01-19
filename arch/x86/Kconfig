@@ -852,6 +852,7 @@ config KVM_GUEST
 config PVM_GUEST
 	bool "PVM Guest support"
 	depends on X86_64 && KVM_GUEST && X86_PIE && !KASAN
+	select PARAVIRT_XXL
 	select RANDOMIZE_MEMORY
 	default n
 	help
