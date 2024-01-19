@@ -82,11 +82,6 @@ static void __head set_kernel_map_base(unsigned long text_base)
 }
 #endif
 
-#define SYM_ABS_VA(sym) ({					\
-	unsigned long __v;					\
-	asm("movabsq $" __stringify(sym) ", %0":"=r"(__v));	\
-	__v; })
-
 static unsigned long __head sme_postprocess_startup(struct boot_params *bp, pmdval_t *pmd)
 {
 	unsigned long vaddr, vaddr_end;

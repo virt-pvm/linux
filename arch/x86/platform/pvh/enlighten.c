@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/acpi.h>
+#include <linux/pgtable.h>
 
 #include <xen/hvc-console.h>
 
+#include <asm/init.h>
 #include <asm/io_apic.h>
 #include <asm/hypervisor.h>
 #include <asm/e820/api.h>
@@ -112,6 +114,26 @@ static void __init hypervisor_specific_init(bool xen_guest)
 	if (xen_guest)
 		xen_pvh_init(&pvh_bootparams);
 }
+
+#ifdef CONFIG_PVM_GUEST
+void pvm_relocate_kernel(unsigned long physbase);
+
+void __init pvm_update_pgtable(unsigned long physbase)
+{
+	pgdval_t *pgd;
+	pudval_t *pud;
+	unsigned long base;
+
+	pvm_relocate_kernel(physbase);
+
+	pgd = (pgdval_t *)init_top_pgt;
+	base = SYM_ABS_VA(_text);
+	pgd[pgd_index(base)] = pgd[0];
+	pgd[pgd_index(page_offset_base)] = pgd[0];
+	pud = (pudval_t *)level3_ident_pgt;
+	pud[pud_index(base)] = (unsigned long)level2_ident_pgt + _KERNPG_TABLE_NOENC;
+}
+#endif
 
 /*
  * This routine (and those that it might call) should not use

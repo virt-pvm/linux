@@ -109,6 +109,10 @@ SYM_CODE_START_LOCAL(pvh_start_xen)
 	wrmsr
 
 #ifdef CONFIG_X86_PIE
+#ifdef CONFIG_PVM_GUEST
+	leaq	_text(%rip), %rdi
+	call	pvm_update_pgtable
+#endif
 	movabs  $2f, %rax
 	ANNOTATE_RETPOLINE_SAFE
 	jmp *%rax
