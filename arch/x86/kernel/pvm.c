@@ -73,6 +73,81 @@ static __always_inline long pvm_hypercall3(unsigned int nr, unsigned long p1,
 	return ret;
 }
 
+static void pvm_load_gs_index(unsigned int sel)
+{
+	if (sel & 4) {
+		pr_warn_once("pvm guest doesn't support LDT");
+		this_cpu_write(pvm_vcpu_struct.user_gsbase, 0);
+	} else {
+		unsigned long base;
+
+		preempt_disable();
+		base = pvm_hypercall1(PVM_HC_LOAD_GS, sel);
+		__this_cpu_write(pvm_vcpu_struct.user_gsbase, base);
+		preempt_enable();
+	}
+}
+
+static unsigned long long pvm_read_msr_safe(unsigned int msr, int *err)
+{
+	switch (msr) {
+	case MSR_FS_BASE:
+		*err = 0;
+		return rdfsbase();
+	case MSR_KERNEL_GS_BASE:
+		*err = 0;
+		return this_cpu_read(pvm_vcpu_struct.user_gsbase);
+	default:
+		return native_read_msr_safe(msr, err);
+	}
+}
+
+static unsigned long long pvm_read_msr(unsigned int msr)
+{
+	switch (msr) {
+	case MSR_FS_BASE:
+		return rdfsbase();
+	case MSR_KERNEL_GS_BASE:
+		return this_cpu_read(pvm_vcpu_struct.user_gsbase);
+	default:
+		return pvm_hypercall1(PVM_HC_RDMSR, msr);
+	}
+}
+
+static int notrace pvm_write_msr_safe(unsigned int msr, u32 low, u32 high)
+{
+	unsigned long base = ((u64)high << 32) | low;
+
+	switch (msr) {
+	case MSR_FS_BASE:
+		wrfsbase(base);
+		return 0;
+	case MSR_KERNEL_GS_BASE:
+		this_cpu_write(pvm_vcpu_struct.user_gsbase, base);
+		return 0;
+	default:
+		return pvm_hypercall2(PVM_HC_WRMSR, msr, base);
+	}
+}
+
+static void notrace pvm_write_msr(unsigned int msr, u32 low, u32 high)
+{
+	pvm_write_msr_safe(msr, low, high);
+}
+
+static void pvm_load_tls(struct thread_struct *t, unsigned int cpu)
+{
+	struct desc_struct *gdt = get_cpu_gdt_rw(cpu);
+	unsigned long *tls_array = (unsigned long *)gdt;
+
+	if (memcmp(&gdt[GDT_ENTRY_TLS_MIN], &t->tls_array[0], sizeof(t->tls_array))) {
+		native_load_tls(t, cpu);
+		pvm_hypercall3(PVM_HC_LOAD_TLS, tls_array[GDT_ENTRY_TLS_MIN],
+			       tls_array[GDT_ENTRY_TLS_MIN + 1],
+			       tls_array[GDT_ENTRY_TLS_MIN + 2]);
+	}
+}
+
 void __init pvm_early_event(struct pt_regs *regs)
 {
 	int vector = regs->orig_ax >> 32;
@@ -301,6 +376,16 @@ void __init pvm_early_setup(void)
 
 	setup_force_cpu_cap(X86_FEATURE_KVM_PVM_GUEST);
 	setup_force_cpu_cap(X86_FEATURE_PV_GUEST);
+
+	/* PVM takes care of %gs when switching to usermode for us */
+	pv_ops.cpu.load_gs_index = pvm_load_gs_index;
+	pv_ops.cpu.cpuid = pvm_cpuid;
+
+	pv_ops.cpu.read_msr = pvm_read_msr;
+	pv_ops.cpu.write_msr = pvm_write_msr;
+	pv_ops.cpu.read_msr_safe = pvm_read_msr_safe;
+	pv_ops.cpu.write_msr_safe = pvm_write_msr_safe;
+	pv_ops.cpu.load_tls = pvm_load_tls;
 
 	wrmsrl(MSR_PVM_VCPU_STRUCT, __pa(this_cpu_ptr(&pvm_vcpu_struct)));
 	wrmsrl(MSR_PVM_EVENT_ENTRY, (unsigned long)(void *)pvm_early_kernel_event_entry - 256);
