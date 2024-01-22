@@ -669,6 +669,9 @@ SYSCALL_DEFINE3(modify_ldt, int , func , void __user * , ptr ,
 {
 	int ret = -ENOSYS;
 
+	if (cpu_feature_enabled(X86_FEATURE_KVM_PVM_GUEST))
+		return (unsigned int)ret;
+
 	switch (func) {
 	case 0:
 		ret = read_ldt(ptr, bytecount);

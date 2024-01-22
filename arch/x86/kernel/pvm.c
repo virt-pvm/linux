@@ -457,6 +457,10 @@ void __init pvm_early_setup(void)
 	setup_force_cpu_cap(X86_FEATURE_KVM_PVM_GUEST);
 	setup_force_cpu_cap(X86_FEATURE_PV_GUEST);
 
+	/* Don't use SYSENTER (Intel) and SYSCALL32 (AMD) in vdso. */
+	setup_clear_cpu_cap(X86_FEATURE_SYSENTER32);
+	setup_clear_cpu_cap(X86_FEATURE_SYSCALL32);
+
 	/* PVM takes care of %gs when switching to usermode for us */
 	pv_ops.cpu.load_gs_index = pvm_load_gs_index;
 	pv_ops.cpu.cpuid = pvm_cpuid;

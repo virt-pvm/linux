@@ -378,6 +378,10 @@ void __init map_vsyscall(void)
 	extern char __vsyscall_page;
 	unsigned long physaddr_vsyscall = __pa_symbol(&__vsyscall_page);
 
+	/* Full emulation is not supported in PVM guest, use XONLY instead. */
+	if (vsyscall_mode == EMULATE && boot_cpu_has(X86_FEATURE_KVM_PVM_GUEST))
+		vsyscall_mode = XONLY;
+
 	/*
 	 * For full emulation, the page needs to exist for real.  In
 	 * execute-only mode, there is no PTE at all backing the vsyscall
