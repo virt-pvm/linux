@@ -30,13 +30,18 @@ struct vcpu_pvm {
 
 	unsigned long switch_flags;
 
+	u16 host_ds_sel, host_es_sel;
+
 	u32 hw_cs, hw_ss;
 
+	int loaded_cpu_state;
 	int int_shadow;
 	bool nmi_mask;
 
 	struct gfn_to_pfn_cache pvcs_gpc;
 
+	// emulated x86 msrs
+	u64 msr_tsc_aux;
 	/*
 	 * Only bits masked by msr_ia32_feature_control_valid_bits can be set in
 	 * msr_ia32_feature_control. FEAT_CTL_LOCKED is always included
