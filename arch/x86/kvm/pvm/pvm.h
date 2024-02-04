@@ -28,10 +28,15 @@ int host_mmu_init(void);
 struct vcpu_pvm {
 	struct kvm_vcpu vcpu;
 
+	// guest rflags, turned into hw rflags when in switcher
+	unsigned long rflags;
+
 	unsigned long switch_flags;
 
 	u16 host_ds_sel, host_es_sel;
 
+	u32 exit_vector;
+	u32 exit_error_code;
 	u32 hw_cs, hw_ss;
 
 	int loaded_cpu_state;
