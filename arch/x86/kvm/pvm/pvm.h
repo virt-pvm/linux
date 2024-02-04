@@ -7,6 +7,8 @@
 
 #define SWITCH_FLAGS_INIT	(SWITCH_FLAGS_SMOD)
 
+#define PVM_FAILED_VMENTRY_VECTOR	SWITCH_EXIT_REASONS_FAILED_VMETNRY
+
 #define PT_L4_SHIFT		39
 #define PT_L4_SIZE		(1UL << PT_L4_SHIFT)
 #define DEFAULT_RANGE_L4_SIZE	(32 * PT_L4_SIZE)
@@ -35,6 +37,12 @@ struct vcpu_pvm {
 
 	u16 host_ds_sel, host_es_sel;
 
+	union {
+		unsigned long exit_extra;
+		unsigned long exit_cr2;
+		unsigned long exit_dr6;
+		struct ve_info exit_ve;
+	};
 	u32 exit_vector;
 	u32 exit_error_code;
 	u32 hw_cs, hw_ss;
