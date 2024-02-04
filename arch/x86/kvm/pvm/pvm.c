@@ -16,8 +16,11 @@
 #include <asm/gsseg.h>
 #include <asm/io_bitmap.h>
 #include <asm/pvm_para.h>
+#include <asm/mmu_context.h>
 
 #include "cpuid.h"
+#include "lapic.h"
+#include "trace.h"
 #include "x86.h"
 #include "pvm.h"
 
@@ -204,6 +207,31 @@ static void pvm_switch_to_host(struct vcpu_pvm *pvm)
 	preempt_enable();
 }
 
+static void pvm_set_host_cr3_for_hypervisor(struct vcpu_pvm *pvm)
+{
+	unsigned long cr3;
+
+	if (static_cpu_has(X86_FEATURE_PCID))
+		cr3 = __get_current_cr3_fast() | X86_CR3_PCID_NOFLUSH;
+	else
+		cr3 = __get_current_cr3_fast();
+	this_cpu_write(cpu_tss_rw.tss_ex.host_cr3, cr3);
+}
+
+// Set tss_ex.host_cr3 for VMExit.
+// Set tss_ex.enter_cr3 for VMEnter.
+static void pvm_set_host_cr3(struct vcpu_pvm *pvm)
+{
+	pvm_set_host_cr3_for_hypervisor(pvm);
+	this_cpu_write(cpu_tss_rw.tss_ex.enter_cr3, pvm->vcpu.arch.mmu->root.hpa);
+}
+
+static void pvm_load_mmu_pgd(struct kvm_vcpu *vcpu, hpa_t root_hpa,
+			     int root_level)
+{
+	/* Nothing to do. Guest cr3 will be prepared in pvm_set_host_cr3(). */
+}
+
 DEFINE_PER_CPU(struct vcpu_pvm *, active_pvm_vcpu);
 
 /*
@@ -260,6 +288,136 @@ static bool pvm_has_emulated_msr(struct kvm *kvm, u32 index)
 static bool cpu_has_pvm_wbinvd_exit(void)
 {
 	return true;
+}
+
+static int pvm_vcpu_pre_run(struct kvm_vcpu *vcpu)
+{
+	return 1;
+}
+
+// Save guest registers from host sp0 or IST stack.
+static __always_inline void save_regs(struct kvm_vcpu *vcpu, struct pt_regs *guest)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	vcpu->arch.regs[VCPU_REGS_RAX] = guest->ax;
+	vcpu->arch.regs[VCPU_REGS_RCX] = guest->cx;
+	vcpu->arch.regs[VCPU_REGS_RDX] = guest->dx;
+	vcpu->arch.regs[VCPU_REGS_RBX] = guest->bx;
+	vcpu->arch.regs[VCPU_REGS_RSP] = guest->sp;
+	vcpu->arch.regs[VCPU_REGS_RBP] = guest->bp;
+	vcpu->arch.regs[VCPU_REGS_RSI] = guest->si;
+	vcpu->arch.regs[VCPU_REGS_RDI] = guest->di;
+	vcpu->arch.regs[VCPU_REGS_R8] = guest->r8;
+	vcpu->arch.regs[VCPU_REGS_R9] = guest->r9;
+	vcpu->arch.regs[VCPU_REGS_R10] = guest->r10;
+	vcpu->arch.regs[VCPU_REGS_R11] = guest->r11;
+	vcpu->arch.regs[VCPU_REGS_R12] = guest->r12;
+	vcpu->arch.regs[VCPU_REGS_R13] = guest->r13;
+	vcpu->arch.regs[VCPU_REGS_R14] = guest->r14;
+	vcpu->arch.regs[VCPU_REGS_R15] = guest->r15;
+	vcpu->arch.regs[VCPU_REGS_RIP] = guest->ip;
+	pvm->rflags = guest->flags;
+	pvm->hw_cs = guest->cs;
+	pvm->hw_ss = guest->ss;
+}
+
+// load guest registers to host sp0 stack.
+static __always_inline void load_regs(struct kvm_vcpu *vcpu, struct pt_regs *guest)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	guest->ss = pvm->hw_ss;
+	guest->sp = vcpu->arch.regs[VCPU_REGS_RSP];
+	guest->flags = (pvm->rflags & SWITCH_ENTER_EFLAGS_ALLOWED) | SWITCH_ENTER_EFLAGS_FIXED;
+	guest->cs = pvm->hw_cs;
+	guest->ip = vcpu->arch.regs[VCPU_REGS_RIP];
+	guest->orig_ax = -1;
+	guest->di = vcpu->arch.regs[VCPU_REGS_RDI];
+	guest->si = vcpu->arch.regs[VCPU_REGS_RSI];
+	guest->dx = vcpu->arch.regs[VCPU_REGS_RDX];
+	guest->cx = vcpu->arch.regs[VCPU_REGS_RCX];
+	guest->ax = vcpu->arch.regs[VCPU_REGS_RAX];
+	guest->r8 = vcpu->arch.regs[VCPU_REGS_R8];
+	guest->r9 = vcpu->arch.regs[VCPU_REGS_R9];
+	guest->r10 = vcpu->arch.regs[VCPU_REGS_R10];
+	guest->r11 = vcpu->arch.regs[VCPU_REGS_R11];
+	guest->bx = vcpu->arch.regs[VCPU_REGS_RBX];
+	guest->bp = vcpu->arch.regs[VCPU_REGS_RBP];
+	guest->r12 = vcpu->arch.regs[VCPU_REGS_R12];
+	guest->r13 = vcpu->arch.regs[VCPU_REGS_R13];
+	guest->r14 = vcpu->arch.regs[VCPU_REGS_R14];
+	guest->r15 = vcpu->arch.regs[VCPU_REGS_R15];
+}
+
+static noinstr void pvm_vcpu_run_noinstr(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	struct pt_regs *sp0_regs = (struct pt_regs *)this_cpu_read(cpu_tss_rw.x86_tss.sp0) - 1;
+	struct pt_regs *ret_regs;
+
+	guest_state_enter_irqoff();
+
+	// Load guest registers into the host sp0 stack for switcher.
+	load_regs(vcpu, sp0_regs);
+
+	// Call into switcher and enter guest.
+	ret_regs = switcher_enter_guest();
+
+	// Get the guest registers from the host sp0 stack.
+	save_regs(vcpu, ret_regs);
+	pvm->exit_vector = (ret_regs->orig_ax >> 32);
+	pvm->exit_error_code = (u32)ret_regs->orig_ax;
+
+	guest_state_exit_irqoff();
+}
+
+/*
+ * PVM wrappers for kvm_load_{guest|host}_xsave_state().
+ *
+ * Currently PKU is disabled for shadowpaging and to avoid overhead,
+ * host CR4.PKE is unchanged for entering/exiting guest even when
+ * host CR4.PKE is enabled.
+ *
+ * These wrappers fix pkru when host CR4.PKE is enabled.
+ */
+static inline void pvm_load_guest_xsave_state(struct kvm_vcpu *vcpu)
+{
+	kvm_load_guest_xsave_state(vcpu);
+
+	if (cpu_feature_enabled(X86_FEATURE_PKU)) {
+		if (vcpu->arch.host_pkru)
+			write_pkru(0);
+	}
+}
+
+static inline void pvm_load_host_xsave_state(struct kvm_vcpu *vcpu)
+{
+	kvm_load_host_xsave_state(vcpu);
+
+	if (cpu_feature_enabled(X86_FEATURE_PKU)) {
+		if (rdpkru() != vcpu->arch.host_pkru)
+			write_pkru(vcpu->arch.host_pkru);
+	}
+}
+
+static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	trace_kvm_entry(vcpu);
+
+	pvm_load_guest_xsave_state(vcpu);
+
+	kvm_wait_lapic_expire(vcpu);
+
+	pvm_set_host_cr3(pvm);
+
+	pvm_vcpu_run_noinstr(vcpu);
+
+	pvm_load_host_xsave_state(vcpu);
+
+	return EXIT_FASTPATH_NONE;
 }
 
 static void reset_segment(struct kvm_segment *var, int seg)
@@ -519,6 +677,11 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.prepare_switch_to_guest = pvm_prepare_switch_to_guest,
 	.vcpu_load = pvm_vcpu_load,
 	.vcpu_put = pvm_vcpu_put,
+
+	.load_mmu_pgd = pvm_load_mmu_pgd,
+
+	.vcpu_pre_run = pvm_vcpu_pre_run,
+	.vcpu_run = pvm_vcpu_run,
 
 	.vcpu_after_set_cpuid = pvm_vcpu_after_set_cpuid,
 
