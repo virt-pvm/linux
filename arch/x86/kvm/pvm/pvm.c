@@ -31,6 +31,22 @@ static bool __read_mostly is_intel;
 
 static unsigned long host_idt_base;
 
+static inline bool is_smod(struct vcpu_pvm *pvm)
+{
+	unsigned long switch_flags = pvm->switch_flags;
+
+	if ((switch_flags & SWITCH_FLAGS_MOD_TOGGLE) == SWITCH_FLAGS_SMOD)
+		return true;
+
+	WARN_ON_ONCE((switch_flags & SWITCH_FLAGS_MOD_TOGGLE) != SWITCH_FLAGS_UMOD);
+	return false;
+}
+
+static inline void pvm_switch_flags_toggle_mod(struct vcpu_pvm *pvm)
+{
+	pvm->switch_flags ^= SWITCH_FLAGS_MOD_TOGGLE;
+}
+
 static inline u16 kernel_cs_by_msr(u64 msr_star)
 {
 	// [47..32]
@@ -78,6 +94,82 @@ static inline void __save_fs_base(struct vcpu_pvm *pvm)
 static inline void __load_fs_base(struct vcpu_pvm *pvm)
 {
 	wrmsrl(MSR_FS_BASE, pvm->segments[VCPU_SREG_FS].base);
+}
+
+static u64 pvm_read_guest_gs_base(struct vcpu_pvm *pvm)
+{
+	preempt_disable();
+	if (pvm->loaded_cpu_state)
+		__save_gs_base(pvm);
+	preempt_enable();
+
+	return pvm->segments[VCPU_SREG_GS].base;
+}
+
+static u64 pvm_read_guest_fs_base(struct vcpu_pvm *pvm)
+{
+	preempt_disable();
+	if (pvm->loaded_cpu_state)
+		__save_fs_base(pvm);
+	preempt_enable();
+
+	return pvm->segments[VCPU_SREG_FS].base;
+}
+
+static u64 pvm_read_guest_kernel_gs_base(struct vcpu_pvm *pvm)
+{
+	return pvm->msr_kernel_gs_base;
+}
+
+static void pvm_write_guest_gs_base(struct vcpu_pvm *pvm, u64 data)
+{
+	preempt_disable();
+	pvm->segments[VCPU_SREG_GS].base = data;
+	if (pvm->loaded_cpu_state)
+		__load_gs_base(pvm);
+	preempt_enable();
+}
+
+static void pvm_write_guest_fs_base(struct vcpu_pvm *pvm, u64 data)
+{
+	preempt_disable();
+	pvm->segments[VCPU_SREG_FS].base = data;
+	if (pvm->loaded_cpu_state)
+		__load_fs_base(pvm);
+	preempt_enable();
+}
+
+static void pvm_write_guest_kernel_gs_base(struct vcpu_pvm *pvm, u64 data)
+{
+	pvm->msr_kernel_gs_base = data;
+}
+
+// switch_to_smod() and switch_to_umod() switch the mode (smod/umod) and
+// the CR3.  No vTLB flushing when switching the CR3 per PVM Spec.
+static inline void switch_to_smod(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	pvm_switch_flags_toggle_mod(pvm);
+	kvm_mmu_new_pgd(vcpu, pvm->msr_switch_cr3);
+	swap(pvm->msr_switch_cr3, vcpu->arch.cr3);
+
+	pvm_write_guest_gs_base(pvm, pvm->msr_kernel_gs_base);
+	kvm_rsp_write(vcpu, pvm->msr_supervisor_rsp);
+
+	pvm->hw_cs = __USER_CS;
+	pvm->hw_ss = __USER_DS;
+}
+
+static inline void switch_to_umod(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	pvm->msr_supervisor_rsp = kvm_rsp_read(vcpu);
+
+	pvm_switch_flags_toggle_mod(pvm);
+	kvm_mmu_new_pgd(vcpu, pvm->msr_switch_cr3);
+	swap(pvm->msr_switch_cr3, vcpu->arch.cr3);
 }
 
 /*
@@ -309,6 +401,15 @@ static int pvm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	int ret = 0;
 
 	switch (msr_info->index) {
+	case MSR_FS_BASE:
+		msr_info->data = pvm_read_guest_fs_base(pvm);
+		break;
+	case MSR_GS_BASE:
+		msr_info->data = pvm_read_guest_gs_base(pvm);
+		break;
+	case MSR_KERNEL_GS_BASE:
+		msr_info->data = pvm_read_guest_kernel_gs_base(pvm);
+		break;
 	case MSR_STAR:
 		msr_info->data = pvm->msr_star;
 		break;
@@ -352,6 +453,9 @@ static int pvm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_PVM_RETS_RIP:
 		msr_info->data = pvm->msr_rets_rip_plus2 - 2;
 		break;
+	case MSR_PVM_SWITCH_CR3:
+		msr_info->data = pvm->msr_switch_cr3;
+		break;
 	default:
 		ret = kvm_get_msr_common(vcpu, msr_info);
 	}
@@ -372,6 +476,15 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	u64 data = msr_info->data;
 
 	switch (msr_index) {
+	case MSR_FS_BASE:
+		pvm_write_guest_fs_base(pvm, data);
+		break;
+	case MSR_GS_BASE:
+		pvm_write_guest_gs_base(pvm, data);
+		break;
+	case MSR_KERNEL_GS_BASE:
+		pvm_write_guest_kernel_gs_base(pvm, data);
+		break;
 	case MSR_STAR:
 		/*
 		 * Guest KERNEL_CS/DS shouldn't be NULL and guest USER_CS/DS
@@ -436,11 +549,21 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_PVM_RETS_RIP:
 		pvm->msr_rets_rip_plus2 = msr_info->data + 2;
 		break;
+	case MSR_PVM_SWITCH_CR3:
+		pvm->msr_switch_cr3 = msr_info->data;
+		break;
 	default:
 		ret = kvm_set_msr_common(vcpu, msr_info);
 	}
 
 	return ret;
+}
+
+static int pvm_get_cpl(struct kvm_vcpu *vcpu)
+{
+	if (is_smod(to_pvm(vcpu)))
+		return 0;
+	return 3;
 }
 
 static void pvm_setup_mce(struct kvm_vcpu *vcpu)
@@ -682,6 +805,11 @@ static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu)
 	pvm_set_host_cr3(pvm);
 
 	pvm_vcpu_run_noinstr(vcpu);
+
+	if (is_smod(pvm)) {
+		if (pvm->hw_cs != __USER_CS || pvm->hw_ss != __USER_DS)
+			kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+	}
 
 	pvm_load_host_xsave_state(vcpu);
 
@@ -949,6 +1077,7 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.get_msr_feature = pvm_get_msr_feature,
 	.get_msr = pvm_get_msr,
 	.set_msr = pvm_set_msr,
+	.get_cpl = pvm_get_cpl,
 	.load_mmu_pgd = pvm_load_mmu_pgd,
 
 	.vcpu_pre_run = pvm_vcpu_pre_run,
