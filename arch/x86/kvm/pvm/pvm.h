@@ -61,6 +61,7 @@ struct vcpu_pvm {
 	u64 unused_MSR_IA32_SYSENTER_CS;
 	u64 unused_MSR_IA32_SYSENTER_EIP;
 	u64 unused_MSR_IA32_SYSENTER_ESP;
+	u64 msr_kernel_gs_base;
 	u64 msr_tsc_aux;
 	/*
 	 * Only bits masked by msr_ia32_feature_control_valid_bits can be set in
