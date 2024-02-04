@@ -265,6 +265,58 @@ static void pvm_setup_mce(struct kvm_vcpu *vcpu)
 {
 }
 
+static int handle_exit_external_interrupt(struct kvm_vcpu *vcpu)
+{
+	++vcpu->stat.irq_exits;
+	return 1;
+}
+
+static int handle_exit_failed_vmentry(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	u32 error_code = pvm->exit_error_code;
+
+	kvm_queue_exception_e(vcpu, GP_VECTOR, error_code);
+	return 1;
+}
+
+/*
+ * The guest has exited.  See if we can fix it or if we need userspace
+ * assistance.
+ */
+static int pvm_handle_exit(struct kvm_vcpu *vcpu, fastpath_t exit_fastpath)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	u32 exit_reason = pvm->exit_vector;
+
+	if (exit_reason >= FIRST_EXTERNAL_VECTOR && exit_reason < NR_VECTORS)
+		return handle_exit_external_interrupt(vcpu);
+	else if (exit_reason == PVM_FAILED_VMENTRY_VECTOR)
+		return handle_exit_failed_vmentry(vcpu);
+
+	vcpu_unimpl(vcpu, "pvm: unexpected exit reason 0x%x\n", exit_reason);
+	vcpu->run->exit_reason = KVM_EXIT_INTERNAL_ERROR;
+	vcpu->run->internal.suberror =
+		KVM_INTERNAL_ERROR_UNEXPECTED_EXIT_REASON;
+	vcpu->run->internal.ndata = 2;
+	vcpu->run->internal.data[0] = exit_reason;
+	vcpu->run->internal.data[1] = vcpu->arch.last_vmentry_cpu;
+	return 0;
+}
+
+static void pvm_handle_exit_irqoff(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	u32 vector = pvm->exit_vector;
+	gate_desc *desc = (gate_desc *)host_idt_base + vector;
+
+	if (vector >= FIRST_EXTERNAL_VECTOR && vector < NR_VECTORS &&
+	    vector != IA32_SYSCALL_VECTOR)
+		kvm_do_interrupt_irqoff(vcpu, gate_offset(desc));
+	else if (vector == MC_VECTOR)
+		kvm_machine_check();
+}
+
 static bool pvm_has_emulated_msr(struct kvm *kvm, u32 index)
 {
 	switch (index) {
@@ -368,6 +420,40 @@ static noinstr void pvm_vcpu_run_noinstr(struct kvm_vcpu *vcpu)
 	save_regs(vcpu, ret_regs);
 	pvm->exit_vector = (ret_regs->orig_ax >> 32);
 	pvm->exit_error_code = (u32)ret_regs->orig_ax;
+
+	// handle noinstr vmexits reasons.
+	switch (pvm->exit_vector) {
+	case PF_VECTOR:
+		// if the exit due to #PF, check for async #PF.
+		pvm->exit_cr2 = read_cr2();
+		vcpu->arch.apf.host_apf_flags = kvm_read_and_reset_apf_flags();
+		break;
+	case NMI_VECTOR:
+		kvm_do_nmi_irqoff(vcpu);
+		break;
+	case VE_VECTOR:
+		// TODO: pvm host is TDX guest.
+		// tdx_get_ve_info(&pvm->host_ve);
+		break;
+	case X86_TRAP_VC:
+		/*
+		 * TODO: pvm host is SEV guest.
+		 * if (!vc_is_db(error_code)) {
+		 *      collect info and handle the first part for #VC
+		 *      break;
+		 * } else {
+		 *      get_debugreg(pvm->exit_dr6, 6);
+		 *      set_debugreg(DR6_RESERVED, 6);
+		 * }
+		 */
+		break;
+	case DB_VECTOR:
+		get_debugreg(pvm->exit_dr6, 6);
+		set_debugreg(DR6_RESERVED, 6);
+		break;
+	default:
+		break;
+	}
 
 	guest_state_exit_irqoff();
 }
@@ -682,8 +768,11 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 
 	.vcpu_pre_run = pvm_vcpu_pre_run,
 	.vcpu_run = pvm_vcpu_run,
+	.handle_exit = pvm_handle_exit,
 
 	.vcpu_after_set_cpuid = pvm_vcpu_after_set_cpuid,
+
+	.handle_exit_irqoff = pvm_handle_exit_irqoff,
 
 	.sched_in = pvm_sched_in,
 
