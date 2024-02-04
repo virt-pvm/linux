@@ -55,6 +55,117 @@ static bool cpu_has_pvm_wbinvd_exit(void)
 	return true;
 }
 
+static void reset_segment(struct kvm_segment *var, int seg)
+{
+	memset(var, 0, sizeof(*var));
+	var->limit = 0xffff;
+	var->present = 1;
+
+	switch (seg) {
+	case VCPU_SREG_CS:
+		var->s = 1;
+		var->type = 0xb; /* Code Segment */
+		var->selector = 0xf000;
+		var->base = 0xffff0000;
+		break;
+	case VCPU_SREG_LDTR:
+		var->s = 0;
+		var->type = DESC_LDT;
+		break;
+	case VCPU_SREG_TR:
+		var->s = 0;
+		var->type = DESC_TSS | 0x2; // TSS32 busy
+		break;
+	default:
+		var->s = 1;
+		var->type = 3; /* Read/Write Data Segment */
+		break;
+	}
+}
+
+static void __pvm_vcpu_reset(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	if (is_intel)
+		vcpu->arch.microcode_version = 0x100000000ULL;
+	else
+		vcpu->arch.microcode_version = 0x01000065;
+
+	pvm->msr_ia32_feature_control_valid_bits = FEAT_CTL_LOCKED;
+}
+
+static void pvm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	int i;
+
+	kvm_gpc_deactivate(&pvm->pvcs_gpc);
+
+	if (!init_event)
+		__pvm_vcpu_reset(vcpu);
+
+	/*
+	 * For PVM, cpuid faulting relies on hardware capability, but it is set
+	 * as supported by default in kvm_arch_vcpu_create(). Therefore, it
+	 * should be cleared if the host doesn't support it.
+	 */
+	if (!boot_cpu_has(X86_FEATURE_CPUID_FAULT))
+		vcpu->arch.msr_platform_info &= ~MSR_PLATFORM_INFO_CPUID_FAULT;
+
+	// X86 resets
+	for (i = 0; i < ARRAY_SIZE(pvm->segments); i++)
+		reset_segment(&pvm->segments[i], i);
+	kvm_set_cr8(vcpu, 0);
+	pvm->idt_ptr.address = 0;
+	pvm->idt_ptr.size = 0xffff;
+	pvm->gdt_ptr.address = 0;
+	pvm->gdt_ptr.size = 0xffff;
+
+	// PVM resets
+	pvm->switch_flags = SWITCH_FLAGS_INIT;
+	pvm->hw_cs = __USER_CS;
+	pvm->hw_ss = __USER_DS;
+	pvm->int_shadow = 0;
+	pvm->nmi_mask = false;
+
+	pvm->msr_vcpu_struct = 0;
+	pvm->msr_supervisor_rsp = 0;
+	pvm->msr_event_entry = 0;
+	pvm->msr_retu_rip_plus2 = 0;
+	pvm->msr_rets_rip_plus2 = 0;
+	pvm->msr_switch_cr3 = 0;
+}
+
+static int pvm_vcpu_create(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	BUILD_BUG_ON(offsetof(struct vcpu_pvm, vcpu) != 0);
+
+	pvm->switch_flags = SWITCH_FLAGS_INIT;
+	kvm_gpc_init(&pvm->pvcs_gpc, vcpu->kvm, vcpu, KVM_GUEST_AND_HOST_USE_PFN);
+
+	return 0;
+}
+
+static void pvm_vcpu_free(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	kvm_gpc_deactivate(&pvm->pvcs_gpc);
+}
+
+static void pvm_vcpu_after_set_cpuid(struct kvm_vcpu *vcpu)
+{
+}
+
+static int pvm_vm_init(struct kvm *kvm)
+{
+	kvm->arch.host_mmu_root_pgd = host_mmu_root_pgd;
+	return 0;
+}
+
 static int hardware_enable(void)
 {
 	/* Nothing to do */
@@ -168,6 +279,15 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.has_emulated_msr = pvm_has_emulated_msr,
 
 	.has_wbinvd_exit = cpu_has_pvm_wbinvd_exit,
+
+	.vm_size = sizeof(struct kvm_pvm),
+	.vm_init = pvm_vm_init,
+
+	.vcpu_create = pvm_vcpu_create,
+	.vcpu_free = pvm_vcpu_free,
+	.vcpu_reset = pvm_vcpu_reset,
+
+	.vcpu_after_set_cpuid = pvm_vcpu_after_set_cpuid,
 
 	.nested_ops = &pvm_nested_ops,
 

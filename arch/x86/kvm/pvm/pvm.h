@@ -3,6 +3,9 @@
 #define __KVM_X86_PVM_H
 
 #include <linux/kvm_host.h>
+#include <asm/switcher.h>
+
+#define SWITCH_FLAGS_INIT	(SWITCH_FLAGS_SMOD)
 
 #define PT_L4_SHIFT		39
 #define PT_L4_SIZE		(1UL << PT_L4_SHIFT)
@@ -24,6 +27,37 @@ int host_mmu_init(void);
 
 struct vcpu_pvm {
 	struct kvm_vcpu vcpu;
+
+	unsigned long switch_flags;
+
+	u32 hw_cs, hw_ss;
+
+	int int_shadow;
+	bool nmi_mask;
+
+	struct gfn_to_pfn_cache pvcs_gpc;
+
+	/*
+	 * Only bits masked by msr_ia32_feature_control_valid_bits can be set in
+	 * msr_ia32_feature_control. FEAT_CTL_LOCKED is always included
+	 * in msr_ia32_feature_control_valid_bits.
+	 */
+	u64 msr_ia32_feature_control;
+	u64 msr_ia32_feature_control_valid_bits;
+
+	// PVM paravirt MSRs
+	unsigned long msr_vcpu_struct;
+	unsigned long msr_supervisor_rsp;
+	unsigned long msr_supervisor_redzone;
+	unsigned long msr_event_entry;
+	unsigned long msr_retu_rip_plus2;
+	unsigned long msr_rets_rip_plus2;
+	unsigned long msr_switch_cr3;
+	unsigned long msr_linear_address_range;
+
+	struct kvm_segment segments[NR_VCPU_SREG];
+	struct desc_ptr idt_ptr;
+	struct desc_ptr gdt_ptr;
 };
 
 struct kvm_pvm {
