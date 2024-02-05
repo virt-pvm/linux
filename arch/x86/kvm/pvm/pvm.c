@@ -383,6 +383,8 @@ static void pvm_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 
+	pvm->host_debugctlmsr = get_debugctlmsr();
+
 	if (__this_cpu_read(active_pvm_vcpu) == pvm && vcpu->cpu == cpu)
 		return;
 
@@ -533,6 +535,9 @@ static int pvm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_IA32_SYSENTER_ESP:
 		msr_info->data = pvm->unused_MSR_IA32_SYSENTER_ESP;
 		break;
+	case MSR_IA32_DEBUGCTLMSR:
+		msr_info->data = 0;
+		break;
 	case MSR_PVM_VCPU_STRUCT:
 		msr_info->data = pvm->msr_vcpu_struct;
 		break;
@@ -618,6 +623,9 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		break;
 	case MSR_IA32_SYSENTER_ESP:
 		pvm->unused_MSR_IA32_SYSENTER_ESP = data;
+		break;
+	case MSR_IA32_DEBUGCTLMSR:
+		/* It is ignored now. */
 		break;
 	case MSR_PVM_VCPU_STRUCT:
 		if (!PAGE_ALIGNED(data))
@@ -808,6 +816,10 @@ static void pvm_refresh_apicv_exec_ctrl(struct kvm_vcpu *vcpu)
 static bool pvm_apic_init_signal_blocked(struct kvm_vcpu *vcpu)
 {
 	return false;
+}
+
+static void update_exception_bitmap(struct kvm_vcpu *vcpu)
+{
 }
 
 static struct pvm_vcpu_struct *pvm_get_vcpu_struct(struct vcpu_pvm *pvm)
@@ -1235,6 +1247,72 @@ static int pvm_vcpu_pre_run(struct kvm_vcpu *vcpu)
 	return 1;
 }
 
+static void pvm_sync_dirty_debug_regs(struct kvm_vcpu *vcpu)
+{
+	WARN_ONCE(1, "pvm never sets KVM_DEBUGREG_WONT_EXIT\n");
+}
+
+static void pvm_set_dr7(struct kvm_vcpu *vcpu, unsigned long val)
+{
+	to_pvm(vcpu)->guest_dr7 = val;
+}
+
+static __always_inline unsigned long __dr7_enable_mask(int drnum)
+{
+	unsigned long bp_mask = 0;
+
+	bp_mask |= (DR_LOCAL_ENABLE << (drnum * DR_ENABLE_SIZE));
+	bp_mask |= (DR_GLOBAL_ENABLE << (drnum * DR_ENABLE_SIZE));
+
+	return bp_mask;
+}
+
+static __always_inline unsigned long __dr7_mask(int drnum)
+{
+	unsigned long bp_mask = 0xf;
+
+	bp_mask <<= (DR_CONTROL_SHIFT + drnum * DR_CONTROL_SIZE);
+	bp_mask |= __dr7_enable_mask(drnum);
+
+	return bp_mask;
+}
+
+/*
+ * Calculate the correct dr7 for the hardware to avoid the host
+ * being watched.
+ *
+ * It only needs to be calculated each time when vcpu->arch.eff_db or
+ * pvm->guest_dr7 is changed.  But now it is calculated each time on
+ * VM-enter since there is no proper callback for vcpu->arch.eff_db and
+ * it is slow path.
+ */
+static __always_inline unsigned long pvm_eff_dr7(struct kvm_vcpu *vcpu)
+{
+	unsigned long eff_dr7 = to_pvm(vcpu)->guest_dr7;
+	int i;
+
+	/*
+	 * DR7_GD should not be set to hardware. And it doesn't need to be
+	 * set to hardware since PVM guest is running on hardware ring3.
+	 * All access to debug registers will be trapped and the emulation
+	 * code can handle DR7_GD correctly for PVM.
+	 */
+	eff_dr7 &= ~DR7_GD;
+
+	/*
+	 * Disallow addresses that are not for the guest, especially addresses
+	 * on the host entry code.
+	 */
+	for (i = 0; i < KVM_NR_DB_REGS; i++) {
+		if (!pvm_guest_allowed_va(vcpu, vcpu->arch.eff_db[i]))
+			eff_dr7 &= ~__dr7_mask(i);
+		if (!pvm_guest_allowed_va(vcpu, vcpu->arch.eff_db[i] + 7))
+			eff_dr7 &= ~__dr7_mask(i);
+	}
+
+	return eff_dr7;
+}
+
 // Save guest registers from host sp0 or IST stack.
 static __always_inline void save_regs(struct kvm_vcpu *vcpu, struct pt_regs *guest)
 {
@@ -1301,6 +1379,9 @@ static noinstr void pvm_vcpu_run_noinstr(struct kvm_vcpu *vcpu)
 	// Load guest registers into the host sp0 stack for switcher.
 	load_regs(vcpu, sp0_regs);
 
+	if (unlikely(pvm->guest_dr7 & DR7_BP_EN_MASK))
+		set_debugreg(pvm_eff_dr7(vcpu), 7);
+
 	// Call into switcher and enter guest.
 	ret_regs = switcher_enter_guest();
 
@@ -1308,6 +1389,11 @@ static noinstr void pvm_vcpu_run_noinstr(struct kvm_vcpu *vcpu)
 	save_regs(vcpu, ret_regs);
 	pvm->exit_vector = (ret_regs->orig_ax >> 32);
 	pvm->exit_error_code = (u32)ret_regs->orig_ax;
+
+	// dr7 requires to be zero when the controling of debug registers
+	// passes back to the host.
+	if (unlikely(pvm->guest_dr7 & DR7_BP_EN_MASK))
+		set_debugreg(0, 7);
 
 	// handle noinstr vmexits reasons.
 	switch (pvm->exit_vector) {
@@ -1387,7 +1473,14 @@ static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu)
 
 	pvm_set_host_cr3(pvm);
 
+	if (pvm->host_debugctlmsr)
+		update_debugctlmsr(0);
+
 	pvm_vcpu_run_noinstr(vcpu);
+
+	/* MSR_IA32_DEBUGCTLMSR is zeroed before vmenter. Restore it if needed */
+	if (pvm->host_debugctlmsr)
+		update_debugctlmsr(pvm->host_debugctlmsr);
 
 	if (is_smod(pvm)) {
 		struct pvm_vcpu_struct *pvcs = pvm->pvcs_gpc.khva;
@@ -1696,6 +1789,7 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.vcpu_load = pvm_vcpu_load,
 	.vcpu_put = pvm_vcpu_put,
 
+	.update_exception_bitmap = update_exception_bitmap,
 	.get_msr_feature = pvm_get_msr_feature,
 	.get_msr = pvm_get_msr,
 	.set_msr = pvm_set_msr,
@@ -1709,6 +1803,8 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.set_gdt = pvm_set_gdt,
 	.get_idt = pvm_get_idt,
 	.set_idt = pvm_set_idt,
+	.set_dr7 = pvm_set_dr7,
+	.sync_dirty_debug_regs = pvm_sync_dirty_debug_regs,
 	.get_rflags = pvm_get_rflags,
 	.set_rflags = pvm_set_rflags,
 	.get_if_flag = pvm_get_if_flag,
