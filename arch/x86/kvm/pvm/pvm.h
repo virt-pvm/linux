@@ -37,6 +37,7 @@ struct vcpu_pvm {
 	unsigned long switch_flags;
 
 	u16 host_ds_sel, host_es_sel;
+	u64 host_debugctlmsr;
 
 	union {
 		unsigned long exit_extra;
@@ -51,6 +52,8 @@ struct vcpu_pvm {
 	int loaded_cpu_state;
 	int int_shadow;
 	bool nmi_mask;
+
+	unsigned long guest_dr7;
 
 	struct gfn_to_pfn_cache pvcs_gpc;
 
