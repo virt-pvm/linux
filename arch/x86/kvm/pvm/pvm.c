@@ -144,6 +144,28 @@ static void pvm_write_guest_kernel_gs_base(struct vcpu_pvm *pvm, u64 data)
 	pvm->msr_kernel_gs_base = data;
 }
 
+static __always_inline bool pvm_guest_allowed_va(struct kvm_vcpu *vcpu, u64 va)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	if ((s64)va > 0)
+		return true;
+	if (pvm->l4_range_start <= va && va < pvm->l4_range_end)
+		return true;
+	if (pvm->l5_range_start <= va && va < pvm->l5_range_end)
+		return true;
+
+	return false;
+}
+
+static bool pvm_disallowed_va(struct kvm_vcpu *vcpu, u64 va)
+{
+	if (is_noncanonical_address(va, vcpu))
+		return true;
+
+	return !pvm_guest_allowed_va(vcpu, va);
+}
+
 // switch_to_smod() and switch_to_umod() switch the mode (smod/umod) and
 // the CR3.  No vTLB flushing when switching the CR3 per PVM Spec.
 static inline void switch_to_smod(struct kvm_vcpu *vcpu)
@@ -380,6 +402,48 @@ static void pvm_sched_in(struct kvm_vcpu *vcpu, int cpu)
 {
 }
 
+static void pvm_set_msr_linear_address_range(struct vcpu_pvm *pvm,
+					     u64 pml4_i_s, u64 pml4_i_e,
+					     u64 pml5_i_s, u64 pml5_i_e)
+{
+	pvm->msr_linear_address_range = ((0xfe00 | pml4_i_s) << 0) |
+					((0xfe00 | pml4_i_e) << 16) |
+					((0xfe00 | pml5_i_s) << 32) |
+					((0xfe00 | pml5_i_e) << 48);
+
+	pvm->l4_range_start = (0x1fffe00 | pml4_i_s) * PT_L4_SIZE;
+	pvm->l4_range_end = (0x1fffe00 | pml4_i_e) * PT_L4_SIZE;
+	pvm->l5_range_start = (0xfe00 | pml5_i_s) * PT_L5_SIZE;
+	pvm->l5_range_end = (0xfe00 | pml5_i_e) * PT_L5_SIZE;
+}
+
+static void pvm_set_default_msr_linear_address_range(struct vcpu_pvm *pvm)
+{
+	pvm_set_msr_linear_address_range(pvm, pml4_index_start, pml4_index_end,
+					 pml5_index_start, pml5_index_end);
+}
+
+static bool pvm_check_and_set_msr_linear_address_range(struct vcpu_pvm *pvm, u64 msr)
+{
+	u64 pml4_i_s = (msr >> 0) & 0x1ff;
+	u64 pml4_i_e = (msr >> 16) & 0x1ff;
+	u64 pml5_i_s = (msr >> 32) & 0x1ff;
+	u64 pml5_i_e = (msr >> 48) & 0x1ff;
+
+	/* PVM specification requires those bits to be all set. */
+	if ((msr & 0xff00ff00ff00ff00) != 0xff00ff00ff00ff00)
+		return false;
+
+	/* Guest ranges should be inside what the hypervisor can provide. */
+	if (pml4_i_s < pml4_index_start || pml4_i_e > pml4_index_end ||
+	    pml5_i_s < pml5_index_start || pml5_i_e > pml5_index_end)
+		return false;
+
+	pvm_set_msr_linear_address_range(pvm, pml4_i_s, pml4_i_e, pml5_i_s, pml5_i_e);
+
+	return true;
+}
+
 static int pvm_get_msr_feature(struct kvm_msr_entry *msr)
 {
 	return 1;
@@ -455,6 +519,9 @@ static int pvm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		break;
 	case MSR_PVM_SWITCH_CR3:
 		msr_info->data = pvm->msr_switch_cr3;
+		break;
+	case MSR_PVM_LINEAR_ADDRESS_RANGE:
+		msr_info->data = pvm->msr_linear_address_range;
 		break;
 	default:
 		ret = kvm_get_msr_common(vcpu, msr_info);
@@ -551,6 +618,10 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		break;
 	case MSR_PVM_SWITCH_CR3:
 		pvm->msr_switch_cr3 = msr_info->data;
+		break;
+	case MSR_PVM_LINEAR_ADDRESS_RANGE:
+		if (!pvm_check_and_set_msr_linear_address_range(pvm, msr_info->data))
+			return 1;
 		break;
 	default:
 		ret = kvm_set_msr_common(vcpu, msr_info);
@@ -1273,6 +1344,7 @@ static void pvm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 	pvm->msr_retu_rip_plus2 = 0;
 	pvm->msr_rets_rip_plus2 = 0;
 	pvm->msr_switch_cr3 = 0;
+	pvm_set_default_msr_linear_address_range(pvm);
 }
 
 static int pvm_vcpu_create(struct kvm_vcpu *vcpu)
@@ -1520,6 +1592,8 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.msr_filter_changed = pvm_msr_filter_changed,
 	.complete_emulated_msr = kvm_complete_insn_gp,
 	.vcpu_deliver_sipi_vector = kvm_vcpu_deliver_sipi_vector,
+
+	.disallowed_va = pvm_disallowed_va,
 	.vcpu_gpc_refresh = pvm_vcpu_gpc_refresh,
 };
 
