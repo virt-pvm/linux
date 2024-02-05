@@ -31,6 +31,33 @@ static bool __read_mostly is_intel;
 
 static unsigned long host_idt_base;
 
+static inline u16 kernel_cs_by_msr(u64 msr_star)
+{
+	// [47..32]
+	// and force rpl=0
+	return ((msr_star >> 32) & ~0x3);
+}
+
+static inline u16 kernel_ds_by_msr(u64 msr_star)
+{
+	// [47..32] + 8
+	// and force rpl=0
+	return ((msr_star >> 32) & ~0x3) + 8;
+}
+
+static inline u16 user_cs32_by_msr(u64 msr_star)
+{
+	// [63..48] is user_cs32 and force rpl=3
+	return ((msr_star >> 48) | 0x3);
+}
+
+static inline u16 user_cs_by_msr(u64 msr_star)
+{
+	// [63..48] is user_cs32, and [63..48] + 16 is user_cs
+	// and force rpl=3
+	return ((msr_star >> 48) | 0x3) + 16;
+}
+
 static inline void __save_gs_base(struct vcpu_pvm *pvm)
 {
 	// switcher will do a real hw swapgs, so use hw MSR_KERNEL_GS_BASE
@@ -255,6 +282,112 @@ static void pvm_vcpu_put(struct kvm_vcpu *vcpu)
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 
 	pvm_prepare_switch_to_host(pvm);
+}
+
+static int pvm_get_feature_msr(u32 msr, u64 *data)
+{
+	return 1;
+}
+
+static void pvm_msr_filter_changed(struct kvm_vcpu *vcpu)
+{
+	/* Accesses to MSRs are emulated in hypervisor, nothing to do here. */
+}
+
+/*
+ * Reads an msr value (of 'msr_index') into 'msr_info'.
+ * Returns 0 on success, non-0 otherwise.
+ * Assumes vcpu_load() was already called.
+ */
+static int pvm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	int ret = 0;
+
+	switch (msr_info->index) {
+	case MSR_STAR:
+		msr_info->data = pvm->msr_star;
+		break;
+	case MSR_LSTAR:
+		msr_info->data = pvm->msr_lstar;
+		break;
+	case MSR_SYSCALL_MASK:
+		msr_info->data = pvm->msr_syscall_mask;
+		break;
+	case MSR_CSTAR:
+		msr_info->data = pvm->unused_MSR_CSTAR;
+		break;
+	/*
+	 * Since SYSENTER is not supported for the guest, we return a bad
+	 * segment to the emulator when emulating the instruction for #GP.
+	 */
+	case MSR_IA32_SYSENTER_CS:
+		msr_info->data = GDT_ENTRY_INVALID_SEG;
+		break;
+	case MSR_IA32_SYSENTER_EIP:
+		msr_info->data = pvm->unused_MSR_IA32_SYSENTER_EIP;
+		break;
+	case MSR_IA32_SYSENTER_ESP:
+		msr_info->data = pvm->unused_MSR_IA32_SYSENTER_ESP;
+		break;
+	default:
+		ret = kvm_get_msr_common(vcpu, msr_info);
+	}
+
+	return ret;
+}
+
+/*
+ * Writes msr value into the appropriate "register".
+ * Returns 0 on success, non-0 otherwise.
+ * Assumes vcpu_load() was already called.
+ */
+static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	int ret = 0;
+	u32 msr_index = msr_info->index;
+	u64 data = msr_info->data;
+
+	switch (msr_index) {
+	case MSR_STAR:
+		/*
+		 * Guest KERNEL_CS/DS shouldn't be NULL and guest USER_CS/DS
+		 * must be the same as the host USER_CS/DS.
+		 */
+		if (!msr_info->host_initiated) {
+			if (!kernel_cs_by_msr(data))
+				return 1;
+			if (user_cs_by_msr(data) != __USER_CS)
+				return 1;
+		}
+		pvm->msr_star = data;
+		break;
+	case MSR_LSTAR:
+		if (is_noncanonical_address(msr_info->data, vcpu))
+			return 1;
+		pvm->msr_lstar = data;
+		break;
+	case MSR_SYSCALL_MASK:
+		pvm->msr_syscall_mask = data;
+		break;
+	case MSR_CSTAR:
+		pvm->unused_MSR_CSTAR = data;
+		break;
+	case MSR_IA32_SYSENTER_CS:
+		pvm->unused_MSR_IA32_SYSENTER_CS = data;
+		break;
+	case MSR_IA32_SYSENTER_EIP:
+		pvm->unused_MSR_IA32_SYSENTER_EIP = data;
+		break;
+	case MSR_IA32_SYSENTER_ESP:
+		pvm->unused_MSR_IA32_SYSENTER_ESP = data;
+		break;
+	default:
+		ret = kvm_set_msr_common(vcpu, msr_info);
+	}
+
+	return ret;
 }
 
 static void pvm_setup_mce(struct kvm_vcpu *vcpu)
@@ -577,10 +710,6 @@ static void pvm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 	pvm->hw_ss = __USER_DS;
 	pvm->int_shadow = 0;
 	pvm->nmi_mask = false;
-
-	pvm->msr_vcpu_struct = 0;
-	pvm->msr_event_entry = 0;
-	pvm->msr_retu_rip_plus2 = 0;
 }
 
 static int pvm_vcpu_create(struct kvm_vcpu *vcpu)
@@ -758,6 +887,9 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.vcpu_load = pvm_vcpu_load,
 	.vcpu_put = pvm_vcpu_put,
 
+	.get_feature_msr = pvm_get_feature_msr,
+	.get_msr = pvm_get_msr,
+	.set_msr = pvm_set_msr,
 	.load_mmu_pgd = pvm_load_mmu_pgd,
 
 	.vcpu_pre_run = pvm_vcpu_pre_run,
@@ -771,6 +903,9 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.nested_ops = &pvm_nested_ops,
 
 	.setup_mce = pvm_setup_mce,
+
+	.msr_filter_changed = pvm_msr_filter_changed,
+	.complete_emulated_msr = kvm_complete_insn_gp,
 };
 
 static struct kvm_x86_init_ops pvm_init_ops __initdata = {
