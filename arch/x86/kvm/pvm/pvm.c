@@ -20,6 +20,7 @@
 
 #include "cpuid.h"
 #include "lapic.h"
+#include "mmu.h"
 #include "trace.h"
 #include "x86.h"
 #include "pvm.h"
@@ -1161,6 +1162,160 @@ static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 	return 1;
 }
 
+static int handle_exit_debug(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	struct kvm_run *kvm_run = pvm->vcpu.run;
+
+	if (pvm->vcpu.guest_debug &
+	    (KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP)) {
+		kvm_run->exit_reason = KVM_EXIT_DEBUG;
+		kvm_run->debug.arch.dr6 = pvm->exit_dr6 | DR6_FIXED_1 | DR6_RTM;
+		kvm_run->debug.arch.dr7 = vcpu->arch.guest_debug_dr7;
+		kvm_run->debug.arch.pc = kvm_rip_read(vcpu);
+		kvm_run->debug.arch.exception = DB_VECTOR;
+		return 0;
+	}
+
+	kvm_queue_exception_p(vcpu, DB_VECTOR, pvm->exit_dr6);
+	return 1;
+}
+
+/* check if the previous instruction is "int3" on receiving #BP */
+static bool is_bp_trap(struct kvm_vcpu *vcpu)
+{
+	u8 byte = 0;
+	unsigned long rip;
+	struct x86_exception exception;
+	int r;
+
+	rip = kvm_rip_read(vcpu) - 1;
+	r = kvm_read_guest_virt(vcpu, rip, &byte, 1, &exception);
+
+	/* Just assume it to be int3 when failed to fetch the instruction. */
+	if (r)
+		return true;
+
+	return byte == 0xcc;
+}
+
+static int handle_exit_breakpoint(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	struct kvm_run *kvm_run = pvm->vcpu.run;
+
+	/*
+	 * Breakpoint exception can be caused by int3 or int 3.  While "int3"
+	 * participates in guest debug, but "int 3" should not.
+	 */
+	if ((vcpu->guest_debug & KVM_GUESTDBG_USE_SW_BP) && is_bp_trap(vcpu)) {
+		kvm_rip_write(vcpu, kvm_rip_read(vcpu) - 1);
+		kvm_run->exit_reason = KVM_EXIT_DEBUG;
+		kvm_run->debug.arch.pc = kvm_rip_read(vcpu);
+		kvm_run->debug.arch.exception = BP_VECTOR;
+		return 0;
+	}
+
+	kvm_queue_exception(vcpu, BP_VECTOR);
+	return 1;
+}
+
+static int handle_exit_exception(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	struct kvm_run *kvm_run = vcpu->run;
+	u32 vector, error_code;
+	int err;
+
+	vector = pvm->exit_vector;
+	error_code = pvm->exit_error_code;
+
+	switch (vector) {
+	// #PF, #GP, #UD, #DB and #BP are guest exceptions or hypervisor
+	// interested exceptions for emulation or debugging.
+	case PF_VECTOR:
+		// Remove hardware generated PFERR_USER_MASK when in supervisor
+		// mode to reflect the real mode in PVM.
+		if (is_smod(pvm))
+			error_code &= ~PFERR_USER_MASK;
+
+		// If it is a PK fault, set pkru=0 and re-enter the guest silently.
+		// See the comment before pvm_load_guest_xsave_state().
+		if (cpu_feature_enabled(X86_FEATURE_PKU) && (error_code & PFERR_PK_MASK))
+			return 1;
+
+		return kvm_handle_page_fault(vcpu, error_code, pvm->exit_cr2,
+					     NULL, 0);
+	case GP_VECTOR:
+		err = kvm_emulate_instruction(vcpu, EMULTYPE_PVM_GP);
+		if (!err)
+			return 0;
+
+		if (vcpu->arch.halt_request) {
+			vcpu->arch.halt_request = 0;
+			return kvm_emulate_halt_noskip(vcpu);
+		}
+		return 1;
+	case UD_VECTOR:
+		if (!is_smod(pvm)) {
+			kvm_queue_exception(vcpu, UD_VECTOR);
+			return 1;
+		}
+		return handle_ud(vcpu);
+	case DB_VECTOR:
+		return handle_exit_debug(vcpu);
+	case BP_VECTOR:
+		return handle_exit_breakpoint(vcpu);
+
+	// #DE, #OF, #BR, #NM, #MF, #XM, #TS, #NP, #SS and #AC are pure guest
+	// exceptions.
+	case DE_VECTOR:
+	case OF_VECTOR:
+	case BR_VECTOR:
+	case NM_VECTOR:
+	case MF_VECTOR:
+	case XM_VECTOR:
+		kvm_queue_exception(vcpu, vector);
+		return 1;
+	case AC_VECTOR:
+	case TS_VECTOR:
+	case NP_VECTOR:
+	case SS_VECTOR:
+		kvm_queue_exception_e(vcpu, vector, error_code);
+		return 1;
+
+	// #NMI, #VE, #VC, #MC and #DF are exceptions that belong to host.
+	// They should have been handled in atomic way when vmexit.
+	case NMI_VECTOR:
+		// NMI is handled by pvm_vcpu_run_noinstr().
+		return 1;
+	case VE_VECTOR:
+		// TODO: tdx_handle_virt_exception(regs, &pvm->exit_ve); break;
+		goto unknown_exit_reason;
+	case X86_TRAP_VC:
+		// TODO: handle the second part for #VC.
+		goto unknown_exit_reason;
+	case MC_VECTOR:
+		// MC is handled by pvm_handle_exit_irqoff().
+		// TODO: split kvm_machine_check() to avoid irq-enabled or
+		// schedule code (thread dead) in pvm_handle_exit_irqoff().
+		return 1;
+	case DF_VECTOR:
+		// DF is handled when exiting and can't reach here.
+		pr_warn_once("host bug, can't reach here");
+		break;
+	default:
+unknown_exit_reason:
+		pr_warn_once("unknown exit_reason vector:%d, error_code:%x, rip:0x%lx\n",
+			      vector, pvm->exit_error_code, kvm_rip_read(vcpu));
+		kvm_run->exit_reason = KVM_EXIT_EXCEPTION;
+		kvm_run->ex.exception = vector;
+		kvm_run->ex.error_code = error_code;
+		break;
+	}
+	return 0;
+}
+
 static int handle_exit_external_interrupt(struct kvm_vcpu *vcpu)
 {
 	++vcpu->stat.irq_exits;
@@ -1187,6 +1342,8 @@ static int pvm_handle_exit(struct kvm_vcpu *vcpu, fastpath_t exit_fastpath)
 
 	if (exit_reason == PVM_SYSCALL_VECTOR)
 		return handle_exit_syscall(vcpu);
+	else if (exit_reason >= 0 && exit_reason < FIRST_EXTERNAL_VECTOR)
+		return handle_exit_exception(vcpu);
 	else if (exit_reason == IA32_SYSCALL_VECTOR)
 		return do_pvm_event(vcpu, IA32_SYSCALL_VECTOR, false, 0);
 	else if (exit_reason >= FIRST_EXTERNAL_VECTOR && exit_reason < NR_VECTORS)
