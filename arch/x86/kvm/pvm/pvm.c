@@ -432,6 +432,9 @@ static int pvm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_PVM_VCPU_STRUCT:
 		msr_info->data = pvm->msr_vcpu_struct;
 		break;
+	case MSR_PVM_EVENT_ENTRY:
+		msr_info->data = pvm->msr_event_entry;
+		break;
 	default:
 		ret = kvm_get_msr_common(vcpu, msr_info);
 	}
@@ -517,6 +520,14 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 			if (kvm_gpc_activate(&pvm->pvcs_gpc, data, PAGE_SIZE))
 				kvm_make_request(KVM_REQ_GPC_REFRESH, vcpu);
 		}
+		break;
+	case MSR_PVM_EVENT_ENTRY:
+		if (is_noncanonical_address(data, vcpu) ||
+		    is_noncanonical_address(data + 512, vcpu)) {
+			kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+			return 1;
+		}
+		pvm->msr_event_entry = msr_info->data;
 		break;
 	default:
 		ret = kvm_set_msr_common(vcpu, msr_info);
@@ -614,6 +625,98 @@ static void pvm_event_flags_update(struct kvm_vcpu *vcpu, unsigned long set,
 	pvm_put_vcpu_struct(pvm, new_flags != old_flags);
 }
 
+/* handle pvm event per PVM Spec. */
+static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
+			  bool has_err_code, u64 err_code)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	unsigned long entry;
+	struct pvm_vcpu_struct *pvcs;
+
+	pvcs = pvm_get_vcpu_struct(pvm);
+	if (!pvcs) {
+		kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+		return 1;
+	}
+
+	if (user) {
+		pvcs->user_cs = pvm->hw_cs;
+		pvcs->user_ss = pvm->hw_ss;
+		pvcs->pkru = 0;
+		pvcs->user_gsbase = pvm_read_guest_gs_base(pvm);
+	} else if (unlikely(pvcs->event_vector & 0xFF00)) {
+		/*
+		 * When the guest is busy on handling events, no nested
+		 * events are allowed except for the async exceptions.
+		 *
+		 * Set PVM_PVCS_EVENT_VECTOR_NMI or PVM_PVCS_EVENT_VECTOR_MCE
+		 * correspondingly.
+		 *
+		 * The guest should check async exceptions when it clears any
+		 * PVM_PVCS_EVENT_VECTOR_* bits.
+		 *
+		 * The guest should set PVM_PVCS_EVENT_VECTOR_STD before
+		 * invoking ERETU, and the hypervisor check for any unhandled
+		 * async exceptions when handling ERETU.
+		 */
+		if (vector == NMI_VECTOR)
+			pvcs->event_vector |= PVM_PVCS_EVENT_VECTOR_NMI;
+		else if (vector == MC_VECTOR)
+			pvcs->event_vector |= PVM_PVCS_EVENT_VECTOR_MCE;
+		else
+			kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+
+		pvm_put_vcpu_struct(pvm, true);
+
+		return 1;
+	}
+
+	pvcs->eflags = kvm_get_rflags(vcpu);
+	pvcs->rip = kvm_rip_read(vcpu);
+	pvcs->rcx = kvm_rcx_read(vcpu);
+	pvcs->r11 = kvm_r11_read(vcpu);
+
+	if (has_err_code)
+		pvcs->event_errcode = err_code;
+
+	if (vector == NMI_VECTOR)
+		pvcs->event_vector = PVM_PVCS_EVENT_VECTOR_NMI;
+	else if (vector == MC_VECTOR)
+		pvcs->event_vector = PVM_PVCS_EVENT_VECTOR_MCE;
+	else if (vector != PVM_SYSCALL_VECTOR)
+		pvcs->event_vector = PVM_PVCS_EVENT_VECTOR_STD | vector;
+
+	if (vector == PF_VECTOR)
+		pvcs->cr2 = vcpu->arch.cr2;
+
+	pvm_put_vcpu_struct(pvm, true);
+
+	if (user)
+		switch_to_smod(vcpu);
+
+	if (vector == PVM_SYSCALL_VECTOR)
+		entry = pvm->msr_lstar;
+	else if (user)
+		entry = pvm->msr_event_entry;
+	else
+		entry = pvm->msr_event_entry + 512;
+
+	// Change rip, rflags, rcx and r11 per PVM event delivery specification,
+	// this allows to use sysret in VM enter.
+	kvm_rip_write(vcpu, entry);
+	kvm_rcx_write(vcpu, entry);
+	kvm_set_rflags(vcpu, X86_EFLAGS_FIXED);
+	kvm_r11_write(vcpu, X86_EFLAGS_IF | X86_EFLAGS_FIXED);
+
+	return 1;
+}
+
+static int do_pvm_event(struct kvm_vcpu *vcpu, int vector,
+			bool has_error_code, u64 error_code)
+{
+	return __do_pvm_event(vcpu, !is_smod(to_pvm(vcpu)), vector, has_error_code, error_code);
+}
+
 static unsigned long pvm_get_rflags(struct kvm_vcpu *vcpu)
 {
 	return to_pvm(vcpu)->rflags;
@@ -688,6 +791,49 @@ static void enable_nmi_window(struct kvm_vcpu *vcpu)
 static int pvm_nmi_allowed(struct kvm_vcpu *vcpu, bool for_injection)
 {
 	return !pvm_get_nmi_mask(vcpu) && !pvm_get_interrupt_shadow(vcpu);
+}
+
+/* Always inject the exception directly and consume the event. */
+static void pvm_inject_exception(struct kvm_vcpu *vcpu)
+{
+	unsigned int vector = vcpu->arch.exception.vector;
+	bool has_error_code = vcpu->arch.exception.has_error_code;
+	u32 error_code = vcpu->arch.exception.error_code;
+
+	kvm_deliver_exception_payload(vcpu, &vcpu->arch.exception);
+
+	if (do_pvm_event(vcpu, vector, has_error_code, error_code))
+		kvm_clear_exception_queue(vcpu);
+}
+
+/* Always inject the interrupt directly and consume the event. */
+static void pvm_inject_irq(struct kvm_vcpu *vcpu, bool reinjected)
+{
+	int irq = vcpu->arch.interrupt.nr;
+
+	trace_kvm_inj_virq(irq, vcpu->arch.interrupt.soft, false);
+
+	if (do_pvm_event(vcpu, irq, false, 0))
+		kvm_clear_interrupt_queue(vcpu);
+
+	++vcpu->stat.irq_injections;
+}
+
+/* Always inject the NMI directly and consume the event. */
+static void pvm_inject_nmi(struct kvm_vcpu *vcpu)
+{
+	if (do_pvm_event(vcpu, NMI_VECTOR, false, 0))
+		vcpu->arch.nmi_injected = false;
+
+	++vcpu->stat.nmi_injections;
+}
+
+static void pvm_cancel_injection(struct kvm_vcpu *vcpu)
+{
+	/*
+	 * Nothing to do. Since exceptions/interrupts are delivered immediately
+	 * during event injection, so they cannot be cancelled and reinjected.
+	 */
 }
 
 static void pvm_setup_mce(struct kvm_vcpu *vcpu)
@@ -1045,6 +1191,7 @@ static void pvm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 	pvm->nmi_mask = false;
 
 	pvm->msr_vcpu_struct = 0;
+	pvm->msr_event_entry = 0;
 }
 
 static int pvm_vcpu_create(struct kvm_vcpu *vcpu)
@@ -1257,6 +1404,10 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.handle_exit = pvm_handle_exit,
 	.set_interrupt_shadow = pvm_set_interrupt_shadow,
 	.get_interrupt_shadow = pvm_get_interrupt_shadow,
+	.inject_irq = pvm_inject_irq,
+	.inject_nmi = pvm_inject_nmi,
+	.inject_exception = pvm_inject_exception,
+	.cancel_injection = pvm_cancel_injection,
 	.interrupt_allowed = pvm_interrupt_allowed,
 	.nmi_allowed = pvm_nmi_allowed,
 	.get_nmi_mask = pvm_get_nmi_mask,
