@@ -429,6 +429,9 @@ static int pvm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_IA32_SYSENTER_ESP:
 		msr_info->data = pvm->unused_MSR_IA32_SYSENTER_ESP;
 		break;
+	case MSR_PVM_VCPU_STRUCT:
+		msr_info->data = pvm->msr_vcpu_struct;
+		break;
 	default:
 		ret = kvm_get_msr_common(vcpu, msr_info);
 	}
@@ -491,6 +494,30 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_IA32_SYSENTER_ESP:
 		pvm->unused_MSR_IA32_SYSENTER_ESP = data;
 		break;
+	case MSR_PVM_VCPU_STRUCT:
+		if (!PAGE_ALIGNED(data))
+			return 1;
+		/*
+		 * During the VM restore process, if the VMM restores MSRs
+		 * before adding the user memory region, it can result in a
+		 * failure in kvm_gpc_activate() because no memslot has been
+		 * added yet. As a consequence, the VM will panic after the VM
+		 * restore since the GPC is not active. However, if we store
+		 * the value and make a 'KVM_REQ_GPC_REFRESH' request when
+		 * kvm_gpc_activate() fails later, the GPC can be refreshed by
+		 * the request serving before the VM entry. If the guest writes
+		 * an invalid value, the request will trigger a triple fault in
+		 * request serving.
+		 */
+		pvm->msr_vcpu_struct = data;
+		kvm_make_request(KVM_REQ_EVENT, vcpu);
+		if (!data) {
+			kvm_gpc_deactivate(&pvm->pvcs_gpc);
+		} else {
+			if (kvm_gpc_activate(&pvm->pvcs_gpc, data, PAGE_SIZE))
+				kvm_make_request(KVM_REQ_GPC_REFRESH, vcpu);
+		}
+		break;
 	default:
 		ret = kvm_set_msr_common(vcpu, msr_info);
 	}
@@ -522,6 +549,145 @@ static void pvm_refresh_apicv_exec_ctrl(struct kvm_vcpu *vcpu)
 static bool pvm_apic_init_signal_blocked(struct kvm_vcpu *vcpu)
 {
 	return false;
+}
+
+static struct pvm_vcpu_struct *pvm_get_vcpu_struct(struct vcpu_pvm *pvm)
+{
+	struct gfn_to_pfn_cache *gpc = &pvm->pvcs_gpc;
+
+	read_lock_irq(&gpc->lock);
+	while (!kvm_gpc_check(gpc, PAGE_SIZE)) {
+		read_unlock_irq(&gpc->lock);
+
+		if (kvm_gpc_refresh(gpc, PAGE_SIZE))
+			return NULL;
+
+		read_lock_irq(&gpc->lock);
+	}
+
+	return (struct pvm_vcpu_struct *)(gpc->khva);
+}
+
+static void pvm_put_vcpu_struct(struct vcpu_pvm *pvm, bool dirty)
+{
+	struct gfn_to_pfn_cache *gpc = &pvm->pvcs_gpc;
+
+	read_unlock_irq(&gpc->lock);
+	if (dirty)
+		mark_page_dirty_in_slot(pvm->vcpu.kvm, gpc->memslot,
+					gpc->gpa >> PAGE_SHIFT);
+}
+
+static void pvm_vcpu_gpc_refresh(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	struct gfn_to_pfn_cache *gpc = &pvm->pvcs_gpc;
+
+	if (!gpc->active)
+		return;
+
+	if (pvm_get_vcpu_struct(pvm))
+		pvm_put_vcpu_struct(pvm, false);
+	else
+		kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+}
+
+static void pvm_event_flags_update(struct kvm_vcpu *vcpu, unsigned long set,
+				   unsigned long clear)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	static struct pvm_vcpu_struct *pvcs;
+	unsigned long old_flags, new_flags;
+
+	if (!pvm->msr_vcpu_struct)
+		return;
+
+	pvcs = pvm_get_vcpu_struct(pvm);
+	if (!pvcs)
+		return;
+
+	old_flags = pvcs->event_flags;
+	new_flags = (old_flags | set) & ~clear;
+	if (new_flags != old_flags)
+		pvcs->event_flags = new_flags;
+
+	pvm_put_vcpu_struct(pvm, new_flags != old_flags);
+}
+
+static unsigned long pvm_get_rflags(struct kvm_vcpu *vcpu)
+{
+	return to_pvm(vcpu)->rflags;
+}
+
+static void pvm_set_rflags(struct kvm_vcpu *vcpu, unsigned long rflags)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	int need_update = !!((pvm->rflags ^ rflags) & X86_EFLAGS_IF);
+
+	pvm->rflags = rflags;
+
+	/*
+	 * The IF bit of 'pvcs->event_flags' should not be changed in user
+	 * mode. It is recommended for this bit to be cleared when switching to
+	 * user mode, so that when the guest switches back to supervisor mode,
+	 * the X86_EFLAGS_IF is already cleared.
+	 */
+	if (!need_update || !is_smod(pvm))
+		return;
+
+	if (rflags & X86_EFLAGS_IF)
+		pvm_event_flags_update(vcpu, PVM_EVENT_FLAGS_IF, PVM_EVENT_FLAGS_IP);
+	else
+		pvm_event_flags_update(vcpu, 0, PVM_EVENT_FLAGS_IF);
+}
+
+static bool pvm_get_if_flag(struct kvm_vcpu *vcpu)
+{
+	return pvm_get_rflags(vcpu) & X86_EFLAGS_IF;
+}
+
+static u32 pvm_get_interrupt_shadow(struct kvm_vcpu *vcpu)
+{
+	return to_pvm(vcpu)->int_shadow;
+}
+
+static void pvm_set_interrupt_shadow(struct kvm_vcpu *vcpu, int mask)
+{
+	/* PVM spec: ignore interrupt shadow when in PVM mode. */
+}
+
+static void enable_irq_window(struct kvm_vcpu *vcpu)
+{
+	pvm_event_flags_update(vcpu, PVM_EVENT_FLAGS_IP, 0);
+}
+
+static int pvm_interrupt_allowed(struct kvm_vcpu *vcpu, bool for_injection)
+{
+	return pvm_get_if_flag(vcpu) && !pvm_get_interrupt_shadow(vcpu);
+}
+
+static bool pvm_get_nmi_mask(struct kvm_vcpu *vcpu)
+{
+	return to_pvm(vcpu)->nmi_mask;
+}
+
+static void pvm_set_nmi_mask(struct kvm_vcpu *vcpu, bool masked)
+{
+	to_pvm(vcpu)->nmi_mask = masked;
+}
+
+static void enable_nmi_window(struct kvm_vcpu *vcpu)
+{
+	// Nothing to do.
+	// When it is non pvm mode, the VCPU is being emulated.
+	// When pvm->msr_vcpu_struct is set, NMI is always enabled.
+	// When pvm->msr_vcpu_struct is not set, NMI is disabled but the
+	// code to set it will also check the pending events including NMI.
+}
+
+static int pvm_nmi_allowed(struct kvm_vcpu *vcpu, bool for_injection)
+{
+	return !pvm_get_nmi_mask(vcpu) && !pvm_get_interrupt_shadow(vcpu);
 }
 
 static void pvm_setup_mce(struct kvm_vcpu *vcpu)
@@ -754,6 +920,16 @@ static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu, bool force_immediate_exit)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 
+	/*
+	 * Per to PVM specification, if the GPC of PVCS is invalid, meaning
+	 * 'pvcs_gpc.khva' is NULL, then 'pvm->msr_vcpu_struct' must also be
+	 * NULL.
+	 */
+	if (WARN_ON_ONCE(!pvm->pvcs_gpc.khva && pvm->msr_vcpu_struct)) {
+		kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+		return EXIT_FASTPATH_NONE;
+	}
+
 	trace_kvm_entry(vcpu, force_immediate_exit);
 
 	pvm_load_guest_xsave_state(vcpu);
@@ -765,11 +941,29 @@ static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu, bool force_immediate_exit)
 	pvm_vcpu_run_noinstr(vcpu);
 
 	if (is_smod(pvm)) {
+		struct pvm_vcpu_struct *pvcs = pvm->pvcs_gpc.khva;
+
+		/*
+		 * Load the X86_EFLAGS_IF bit from PVCS. In user mode, the
+		 * Interrupt Flag is considered to be set and cannot be
+		 * changed. Since it is already set in 'pvm->rflags', so
+		 * nothing to do. In supervisor mode, the Interrupt Flag is
+		 * reflected in 'pvcs->event_flags' and can be changed
+		 * directly without triggering a VM exit.
+		 */
+		pvm->rflags &= ~X86_EFLAGS_IF;
+		static_assert(PVM_EVENT_FLAGS_IF == X86_EFLAGS_IF);
+		if (likely(pvm->msr_vcpu_struct))
+			pvm->rflags |= X86_EFLAGS_IF & pvcs->event_flags;
+
 		if (pvm->hw_cs != __USER_CS || pvm->hw_ss != __USER_DS)
 			kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
 	}
 
 	pvm_load_host_xsave_state(vcpu);
+
+	mark_page_dirty_in_slot(vcpu->kvm, pvm->pvcs_gpc.memslot,
+				pvm->pvcs_gpc.gpa >> PAGE_SHIFT);
 
 	return EXIT_FASTPATH_NONE;
 }
@@ -849,6 +1043,8 @@ static void pvm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 	pvm->hw_ss = __USER_DS;
 	pvm->int_shadow = 0;
 	pvm->nmi_mask = false;
+
+	pvm->msr_vcpu_struct = 0;
 }
 
 static int pvm_vcpu_create(struct kvm_vcpu *vcpu)
@@ -896,6 +1092,27 @@ static int pvm_check_processor_compat(void)
 	/* Nothing to do */
 	return 0;
 }
+
+#ifdef CONFIG_KVM_SMM
+static int pvm_smi_allowed(struct kvm_vcpu *vcpu, bool for_injection)
+{
+	return 0;
+}
+
+static int pvm_enter_smm(struct kvm_vcpu *vcpu, union kvm_smram *smram)
+{
+	return 0;
+}
+
+static int pvm_leave_smm(struct kvm_vcpu *vcpu, const union kvm_smram *smram)
+{
+	return 0;
+}
+
+static void enable_smi_window(struct kvm_vcpu *vcpu)
+{
+}
+#endif
 
 /*
  * When in PVM mode, the hardware MSR_LSTAR is set to the entry point
@@ -1031,10 +1248,21 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.set_msr = pvm_set_msr,
 	.get_cpl = pvm_get_cpl,
 	.load_mmu_pgd = pvm_load_mmu_pgd,
+	.get_rflags = pvm_get_rflags,
+	.set_rflags = pvm_set_rflags,
+	.get_if_flag = pvm_get_if_flag,
 
 	.vcpu_pre_run = pvm_vcpu_pre_run,
 	.vcpu_run = pvm_vcpu_run,
 	.handle_exit = pvm_handle_exit,
+	.set_interrupt_shadow = pvm_set_interrupt_shadow,
+	.get_interrupt_shadow = pvm_get_interrupt_shadow,
+	.interrupt_allowed = pvm_interrupt_allowed,
+	.nmi_allowed = pvm_nmi_allowed,
+	.get_nmi_mask = pvm_get_nmi_mask,
+	.set_nmi_mask = pvm_set_nmi_mask,
+	.enable_nmi_window = enable_nmi_window,
+	.enable_irq_window = enable_irq_window,
 	.refresh_apicv_exec_ctrl = pvm_refresh_apicv_exec_ctrl,
 	.deliver_interrupt = pvm_deliver_interrupt,
 
@@ -1046,10 +1274,18 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 
 	.setup_mce = pvm_setup_mce,
 
+#ifdef CONFIG_KVM_SMM
+	.smi_allowed = pvm_smi_allowed,
+	.enter_smm = pvm_enter_smm,
+	.leave_smm = pvm_leave_smm,
+	.enable_smi_window = enable_smi_window,
+#endif
+
 	.apic_init_signal_blocked = pvm_apic_init_signal_blocked,
 	.msr_filter_changed = pvm_msr_filter_changed,
 	.complete_emulated_msr = kvm_complete_insn_gp,
 	.vcpu_deliver_sipi_vector = kvm_vcpu_deliver_sipi_vector,
+	.vcpu_gpc_refresh = pvm_vcpu_gpc_refresh,
 };
 
 static struct kvm_x86_init_ops pvm_init_ops __initdata = {
