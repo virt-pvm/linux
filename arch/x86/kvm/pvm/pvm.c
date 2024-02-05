@@ -402,6 +402,40 @@ static void pvm_sched_in(struct kvm_vcpu *vcpu, int cpu)
 {
 }
 
+static void pvm_patch_hypercall(struct kvm_vcpu *vcpu, unsigned char *hypercall)
+{
+	/* KVM_X86_QUIRK_FIX_HYPERCALL_INSN should not be enabled for pvm guest */
+
+	/* ud2; int3; */
+	hypercall[0] = 0x0F;
+	hypercall[1] = 0x0B;
+	hypercall[2] = 0xCC;
+}
+
+static int pvm_check_emulate_instruction(struct kvm_vcpu *vcpu, int emul_type,
+					 void *insn, int insn_len)
+{
+	return X86EMUL_CONTINUE;
+}
+
+static int skip_emulated_instruction(struct kvm_vcpu *vcpu)
+{
+	return kvm_emulate_instruction(vcpu, EMULTYPE_SKIP);
+}
+
+static int pvm_check_intercept(struct kvm_vcpu *vcpu,
+			       struct x86_instruction_info *info,
+			       enum x86_intercept_stage stage,
+			       struct x86_exception *exception)
+{
+	/*
+	 * HF_GUEST_MASK is not used even nested pvm is supported. L0 pvm
+	 * might even be unaware the L1 pvm.
+	 */
+	WARN_ON_ONCE(1);
+	return X86EMUL_CONTINUE;
+}
+
 static void pvm_set_msr_linear_address_range(struct vcpu_pvm *pvm,
 					     u64 pml4_i_s, u64 pml4_i_e,
 					     u64 pml5_i_s, u64 pml5_i_e)
@@ -1682,8 +1716,10 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.vcpu_pre_run = pvm_vcpu_pre_run,
 	.vcpu_run = pvm_vcpu_run,
 	.handle_exit = pvm_handle_exit,
+	.skip_emulated_instruction = skip_emulated_instruction,
 	.set_interrupt_shadow = pvm_set_interrupt_shadow,
 	.get_interrupt_shadow = pvm_get_interrupt_shadow,
+	.patch_hypercall = pvm_patch_hypercall,
 	.inject_irq = pvm_inject_irq,
 	.inject_nmi = pvm_inject_nmi,
 	.inject_exception = pvm_inject_exception,
@@ -1699,6 +1735,7 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 
 	.vcpu_after_set_cpuid = pvm_vcpu_after_set_cpuid,
 
+	.check_intercept = pvm_check_intercept,
 	.handle_exit_irqoff = pvm_handle_exit_irqoff,
 
 	.request_immediate_exit = __kvm_request_immediate_exit,
@@ -1721,6 +1758,7 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.complete_emulated_msr = kvm_complete_insn_gp,
 	.vcpu_deliver_sipi_vector = kvm_vcpu_deliver_sipi_vector,
 
+	.check_emulate_instruction = pvm_check_emulate_instruction,
 	.disallowed_va = pvm_disallowed_va,
 	.vcpu_gpc_refresh = pvm_vcpu_gpc_refresh,
 };
