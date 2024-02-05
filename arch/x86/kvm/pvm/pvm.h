@@ -78,6 +78,11 @@ struct vcpu_pvm {
 	unsigned long msr_retu_rip_plus2;
 	unsigned long msr_linear_address_range;
 
+	u64 l4_range_start;
+	u64 l4_range_end;
+	u64 l5_range_start;
+	u64 l5_range_end;
+
 	struct kvm_segment segments[NR_VCPU_SREG];
 	struct desc_ptr idt_ptr;
 	struct desc_ptr gdt_ptr;
