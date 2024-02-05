@@ -915,6 +915,15 @@ static void pvm_setup_mce(struct kvm_vcpu *vcpu)
 {
 }
 
+static int handle_exit_syscall(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	if (!is_smod(pvm))
+		return do_pvm_user_event(vcpu, PVM_SYSCALL_VECTOR, false, 0);
+	return 1;
+}
+
 static int handle_exit_external_interrupt(struct kvm_vcpu *vcpu)
 {
 	++vcpu->stat.irq_exits;
@@ -939,7 +948,11 @@ static int pvm_handle_exit(struct kvm_vcpu *vcpu, fastpath_t exit_fastpath)
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 	u32 exit_reason = pvm->exit_vector;
 
-	if (exit_reason >= FIRST_EXTERNAL_VECTOR && exit_reason < NR_VECTORS)
+	if (exit_reason == PVM_SYSCALL_VECTOR)
+		return handle_exit_syscall(vcpu);
+	else if (exit_reason == IA32_SYSCALL_VECTOR)
+		return do_pvm_event(vcpu, IA32_SYSCALL_VECTOR, false, 0);
+	else if (exit_reason >= FIRST_EXTERNAL_VECTOR && exit_reason < NR_VECTORS)
 		return handle_exit_external_interrupt(vcpu);
 	else if (exit_reason == PVM_FAILED_VMENTRY_VECTOR)
 		return handle_exit_failed_vmentry(vcpu);
