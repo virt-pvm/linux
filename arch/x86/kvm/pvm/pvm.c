@@ -1296,6 +1296,39 @@ static int handle_hc_irq_halt(struct kvm_vcpu *vcpu)
 }
 
 /*
+ * Hypercall: PVM_HC_LOAD_PGTBL
+ *	Load two PGDs into the current CR3.
+ *
+ * Arguments:
+ *	flags:	bit0: flush the TLBs tagged with current PCID.
+ *		bit1: 4 (bit1=0) or 5 (bit1=1 && cpuid_has(LA57)) level paging.
+ *	pgd: to be loaded into CR3.
+ */
+static int handle_hc_load_pagetables(struct kvm_vcpu *vcpu, unsigned long flags,
+				     unsigned long pgd)
+{
+	unsigned long cr4 = vcpu->arch.cr4;
+
+	if (!(flags & PVM_LOAD_PGTBL_FLAGS_LA57))
+		cr4 &= ~X86_CR4_LA57;
+	else if (guest_cpuid_has(vcpu, X86_FEATURE_LA57))
+		cr4 |= X86_CR4_LA57;
+
+	if (cr4 != vcpu->arch.cr4) {
+		vcpu->arch.cr4 = cr4;
+		kvm_mmu_reset_context(vcpu);
+		kvm_make_request(KVM_REQ_TLB_FLUSH_GUEST, vcpu);
+	}
+
+	if (flags & PVM_LOAD_PGTBL_FLAGS_TLB)
+		kvm_set_cr3(vcpu, pgd);
+	else
+		kvm_set_cr3(vcpu, pgd | CR3_NOFLUSH);
+
+	return 1;
+}
+
+/*
  * Hypercall: PVM_HC_TLB_FLUSH
  *	Flush all TLBs.
  */
@@ -1392,6 +1425,8 @@ static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 		return handle_hc_irq_window(vcpu);
 	case PVM_HC_IRQ_HALT:
 		return handle_hc_irq_halt(vcpu);
+	case PVM_HC_LOAD_PGTBL:
+		return handle_hc_load_pagetables(vcpu, a0, a1);
 	case PVM_HC_TLB_FLUSH:
 		return handle_hc_flush_tlb_all(vcpu);
 	case PVM_HC_TLB_FLUSH_CURRENT:
