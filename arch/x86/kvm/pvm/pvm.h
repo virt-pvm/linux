@@ -28,6 +28,11 @@ extern u64 *host_mmu_root_pgd;
 void host_mmu_destroy(void);
 int host_mmu_init(void);
 
+#define HOST_PCID_TAG_FOR_GUEST			(32)
+
+#define MIN_HOST_PCID_FOR_GUEST			HOST_PCID_TAG_FOR_GUEST
+#define NUM_HOST_PCID_FOR_GUEST			HOST_PCID_TAG_FOR_GUEST
+
 struct vcpu_pvm {
 	struct kvm_vcpu vcpu;
 
