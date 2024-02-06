@@ -12,6 +12,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/module.h>
+#include <linux/entry-kvm.h>
 
 #include <asm/gsseg.h>
 #include <asm/io_bitmap.h>
@@ -219,6 +220,115 @@ static void pvm_update_guest_cpuid_faulting(struct kvm_vcpu *vcpu, u64 data)
 	preempt_enable();
 }
 
+/*
+ * Non-PVM mode is not a part of PVM.  Basic support for it via emulation.
+ * Non-PVM mode is required for booting the guest and bringing up vCPUs so far.
+ *
+ * In future, when VMM can directly boot the guest and bring vCPUs up from
+ * 64-bit mode without any help from non-64-bit mode, then the support non-PVM
+ * mode will be removed.
+ */
+#define CONVERT_TO_PVM_CR0_OFF	(X86_CR0_NW | X86_CR0_CD)
+#define CONVERT_TO_PVM_CR0_ON	(X86_CR0_NE | X86_CR0_AM | X86_CR0_WP | \
+				 X86_CR0_PG | X86_CR0_PE)
+
+static inline void pvm_standard_msr_star(struct vcpu_pvm *pvm)
+{
+	pvm->msr_star = ((u64)pvm->segments[VCPU_SREG_CS].selector << 32) |
+			((u64)__USER32_CS << 48);
+}
+
+static bool try_to_convert_to_pvm_mode(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	unsigned long cr0 = vcpu->arch.cr0;
+
+	if (!is_long_mode(vcpu))
+		return false;
+	if (!pvm->segments[VCPU_SREG_CS].l) {
+		if (is_smod(pvm))
+			return false;
+		if (!pvm->segments[VCPU_SREG_CS].db)
+			return false;
+	}
+
+	/* Atomically set EFER_SCE converting to PVM mode. */
+	if ((vcpu->arch.efer | EFER_SCE) != vcpu->arch.efer)
+		vcpu->arch.efer |= EFER_SCE;
+
+	/* Change CR0 on converting to PVM mode. */
+	cr0 &= ~CONVERT_TO_PVM_CR0_OFF;
+	cr0 |= CONVERT_TO_PVM_CR0_ON;
+	if (cr0 != vcpu->arch.cr0)
+		kvm_set_cr0(vcpu, cr0);
+
+	/*
+	 * Atomically set MSR_STAR when switching to PVM mode if the guest is
+	 * in supervisor mode. In the case of user mode, the MSR_STAR should be
+	 * set using MSR setting during the VM migration.
+	 */
+	if (is_smod(pvm))
+		pvm_standard_msr_star(pvm);
+
+	pvm->non_pvm_mode = false;
+	pvm->int_shadow = 0;
+	pvm->nmi_mask = 0;
+
+	return true;
+}
+
+static int handle_non_pvm_mode(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	int ret = 1;
+	unsigned int count = 130;
+
+	if (try_to_convert_to_pvm_mode(vcpu))
+		return 1;
+
+	while (pvm->non_pvm_mode && count-- != 0) {
+		if (kvm_test_request(KVM_REQ_EVENT, vcpu))
+			return 1;
+
+		if (try_to_convert_to_pvm_mode(vcpu))
+			return 1;
+
+		ret = kvm_emulate_instruction(vcpu, 0);
+
+		if (!ret)
+			goto out;
+
+		/* don't do mode switch in emulation */
+		if (!is_smod(pvm))
+			goto emulation_error;
+
+		if (vcpu->arch.exception.pending)
+			goto emulation_error;
+
+		if (vcpu->arch.halt_request) {
+			vcpu->arch.halt_request = 0;
+			ret = kvm_emulate_halt_noskip(vcpu);
+			goto out;
+		}
+		/*
+		 * Note, return 1 and not 0, vcpu_run() will invoke
+		 * xfer_to_guest_mode() which will create a proper return
+		 * code.
+		 */
+		if (__xfer_to_guest_mode_work_pending())
+			return 1;
+	}
+
+out:
+	return ret;
+
+emulation_error:
+	vcpu->run->exit_reason = KVM_EXIT_INTERNAL_ERROR;
+	vcpu->run->internal.suberror = KVM_INTERNAL_ERROR_EMULATION;
+	vcpu->run->internal.ndata = 0;
+	return 0;
+}
+
 // switch_to_smod() and switch_to_umod() switch the mode (smod/umod) and
 // the CR3.  No vTLB flushing when switching the CR3 per PVM Spec.
 static inline void switch_to_smod(struct kvm_vcpu *vcpu)
@@ -355,6 +465,10 @@ static void pvm_prepare_switch_to_guest(struct kvm_vcpu *vcpu)
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 
 	if (pvm->loaded_cpu_state)
+		return;
+
+	// we can't load guest state to hardware when guest is not on long mode
+	if (unlikely(pvm->non_pvm_mode))
 		return;
 
 	pvm->loaded_cpu_state = 1;
@@ -1079,6 +1193,11 @@ static void pvm_get_segment(struct kvm_vcpu *vcpu,
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 
+	if (pvm->non_pvm_mode) {
+		*var = pvm->segments[seg];
+		return;
+	}
+
 	// Update CS or SS to reflect the current mode.
 	if (seg == VCPU_SREG_CS) {
 		if (is_smod(pvm)) {
@@ -1150,8 +1269,12 @@ static void pvm_set_segment(struct kvm_vcpu *vcpu, struct kvm_segment *var, int 
 			if (cpl != var->dpl)
 				goto invalid_change;
 			if (cpl == 0 && !var->l)
-				goto invalid_change;
+				pvm->non_pvm_mode = true;
+			if (cpl == 0 && !pvm->non_pvm_mode)
+				pvm_standard_msr_star(pvm);
 		}
+		if (pvm->non_pvm_mode)
+			try_to_convert_to_pvm_mode(vcpu);
 		break;
 	case VCPU_SREG_LDTR:
 		// pvm doesn't support LDT
@@ -1172,12 +1295,17 @@ static void pvm_get_cs_db_l_bits(struct kvm_vcpu *vcpu, int *db, int *l)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 
-	if (pvm->hw_cs == __USER_CS) {
-		*db = 0;
-		*l = 1;
+	if (pvm->non_pvm_mode) {
+		*db = pvm->segments[VCPU_SREG_CS].db;
+		*l = pvm->segments[VCPU_SREG_CS].l;
 	} else {
-		*db = 1;
-		*l = 0;
+		if (pvm->hw_cs == __USER_CS) {
+			*db = 0;
+			*l = 1;
+		} else {
+			*db = 1;
+			*l = 0;
+		}
 	}
 }
 
@@ -1392,6 +1520,19 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 static int do_pvm_event(struct kvm_vcpu *vcpu, int vector,
 			bool has_error_code, u64 error_code)
 {
+	/*
+	 * Unlike in VMX, the injected event is delivered by the guest before
+	 * VM entry, so it is not allowed to inject event in non-PVM mode.
+	 * Although, we have attempted to switch to PVM mode before event
+	 * injection, the VMM may still inject event in non-PVM mode, so issue
+	 * a warning for VMM in such cases. Also, try to swith to PVM mode if
+	 * something is broken in the hypervisor.
+	 */
+	if (unlikely(to_pvm(vcpu)->non_pvm_mode)) {
+		pr_warn_ratelimited("Inject event in non-PVM mode");
+		try_to_convert_to_pvm_mode(vcpu);
+	}
+
 	return __do_pvm_event(vcpu, !is_smod(to_pvm(vcpu)), vector, has_error_code, error_code);
 }
 
@@ -1416,7 +1557,7 @@ static void pvm_set_rflags(struct kvm_vcpu *vcpu, unsigned long rflags)
 	 * user mode, so that when the guest switches back to supervisor mode,
 	 * the X86_EFLAGS_IF is already cleared.
 	 */
-	if (!need_update || !is_smod(pvm))
+	if (unlikely(pvm->non_pvm_mode) || !need_update || !is_smod(pvm))
 		return;
 
 	if (rflags & X86_EFLAGS_IF)
@@ -1437,7 +1578,11 @@ static u32 pvm_get_interrupt_shadow(struct kvm_vcpu *vcpu)
 
 static void pvm_set_interrupt_shadow(struct kvm_vcpu *vcpu, int mask)
 {
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
 	/* PVM spec: ignore interrupt shadow when in PVM mode. */
+	if (pvm->non_pvm_mode)
+		pvm->int_shadow = mask;
 }
 
 static void enable_irq_window(struct kvm_vcpu *vcpu)
@@ -1453,7 +1598,9 @@ static int pvm_interrupt_allowed(struct kvm_vcpu *vcpu, bool for_injection)
 
 static bool pvm_get_nmi_mask(struct kvm_vcpu *vcpu)
 {
-	return to_pvm(vcpu)->nmi_mask;
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	return pvm->non_pvm_mode ? pvm->nmi_mask : !pvm->msr_vcpu_struct;
 }
 
 static void pvm_set_nmi_mask(struct kvm_vcpu *vcpu, bool masked)
@@ -2095,6 +2242,9 @@ static int pvm_handle_exit(struct kvm_vcpu *vcpu, fastpath_t exit_fastpath)
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 	u32 exit_reason = pvm->exit_vector;
 
+	if (unlikely(pvm->non_pvm_mode))
+		return handle_non_pvm_mode(vcpu);
+
 	if (exit_reason == PVM_SYSCALL_VECTOR)
 		return handle_exit_syscall(vcpu);
 	else if (exit_reason >= 0 && exit_reason < FIRST_EXTERNAL_VECTOR)
@@ -2438,6 +2588,13 @@ static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu, bool force_immediate_exit)
 	bool is_smod_before_run = is_smod(pvm);
 
 	/*
+	 * Don't enter guest if guest state is invalid, let the exit handler
+	 * start emulation until we arrive back to a valid state.
+	 */
+	if (pvm->non_pvm_mode)
+		return EXIT_FASTPATH_NONE;
+
+	/*
 	 * Per to PVM specification, if the GPC of PVCS is invalid, meaning
 	 * 'pvcs_gpc.khva' is NULL, then 'pvm->msr_vcpu_struct' must also be
 	 * NULL.
@@ -2558,6 +2715,10 @@ static void pvm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 	 */
 	if (!boot_cpu_has(X86_FEATURE_CPUID_FAULT))
 		vcpu->arch.msr_platform_info &= ~MSR_PLATFORM_INFO_CPUID_FAULT;
+
+	// Non-PVM mode resets
+	pvm->non_pvm_mode = true;
+	pvm->msr_star = 0;
 
 	// X86 resets
 	for (i = 0; i < ARRAY_SIZE(pvm->segments); i++)
