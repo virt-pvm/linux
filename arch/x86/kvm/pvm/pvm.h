@@ -28,6 +28,18 @@ extern u64 *host_mmu_root_pgd;
 void host_mmu_destroy(void);
 int host_mmu_init(void);
 
+#define PVM_ASID_SHIFT			3
+#define NUM_PVM_GUEST_PCID_INDEX	(1U << PVM_ASID_SHIFT)
+#define PVM_GUEST_PTI_PCID_BIT		11
+#define PVM_GUEST_PTI_PCID_MASK		(1U << PVM_GUEST_PTI_PCID_BIT)
+#define PVM_GUEST_PCID_INDEX_MASK	(NUM_PVM_GUEST_PCID_INDEX - 1)
+#define PVM_GUEST_PCID_MASK		(PVM_GUEST_PCID_INDEX_MASK | PVM_GUEST_PTI_PCID_MASK)
+
+#define PVM_ASID_MIN			1
+#define PVM_ASID_MAX			(((1U << PVM_GUEST_PTI_PCID_BIT) - 1) / NUM_PVM_GUEST_PCID_INDEX)
+#define PVM_ASID_GEN_RESERVED		0
+#define PVM_ASID_GEN_INIT		1
+
 struct vcpu_pvm {
 	struct kvm_vcpu vcpu;
 
@@ -56,6 +68,10 @@ struct vcpu_pvm {
 	unsigned long guest_dr7;
 
 	struct gfn_to_pfn_cache pvcs_gpc;
+
+	bool flush_hwtlb_current;
+	u32 asid;
+	u64 asid_generation;
 
 	// emulated x86 msrs
 	u64 msr_lstar;

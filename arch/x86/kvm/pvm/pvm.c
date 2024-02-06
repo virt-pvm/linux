@@ -347,6 +347,132 @@ static void pvm_switch_to_host(struct vcpu_pvm *pvm)
 	preempt_enable();
 }
 
+struct pvm_asid_data {
+	u64 asid_generation;
+	u32 max_asid;
+	u32 next_asid;
+	u32 min_asid;
+};
+
+static DEFINE_PER_CPU(struct pvm_asid_data, pvm_asid);
+
+static void __pvm_hwtlb_flush_all(void)
+{
+	__flush_tlb_all();
+}
+
+static void update_asid(struct vcpu_pvm *pvm)
+{
+	struct pvm_asid_data *asid_data = this_cpu_ptr(&pvm_asid);
+
+	if (pvm->asid_generation == asid_data->asid_generation)
+		return;
+
+	if (asid_data->next_asid > asid_data->max_asid) {
+		++asid_data->asid_generation;
+		if (!asid_data->asid_generation)
+			asid_data->asid_generation = PVM_ASID_GEN_INIT;
+		asid_data->next_asid = asid_data->min_asid;
+		__pvm_hwtlb_flush_all();
+	}
+
+	pvm->asid_generation = asid_data->asid_generation;
+	pvm->asid = asid_data->next_asid++;
+	pvm->flush_hwtlb_current = false;
+}
+
+static inline bool is_asid_clean(struct vcpu_pvm *pvm)
+{
+	struct pvm_asid_data *asid_data = this_cpu_ptr(&pvm_asid);
+
+	return pvm->asid_generation == asid_data->asid_generation;
+}
+
+static inline u32 guest_pcid_to_host_pcid(struct vcpu_pvm *pvm, u32 guest_pcid, bool is_smod)
+{
+	u32 pcid;
+
+	if (guest_pcid & ~PVM_GUEST_PCID_MASK)
+		guest_pcid = 0;
+	pcid = (pvm->asid << PVM_ASID_SHIFT) | (guest_pcid & PVM_GUEST_PCID_MASK);
+	if (!is_smod)
+		pcid |= PVM_GUEST_PTI_PCID_MASK;
+
+	return pcid;
+}
+
+static void pvm_flush_hwtlb(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	pvm->asid_generation = PVM_ASID_GEN_RESERVED;
+}
+
+static void pvm_flush_hwtlb_current(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	pvm->flush_hwtlb_current = true;
+}
+
+static void pvm_flush_hwtlb_gva(struct kvm_vcpu *vcpu, gva_t addr)
+{
+	struct kvm_mmu *mmu = vcpu->arch.mmu;
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	int i;
+
+	if (!static_cpu_has(X86_FEATURE_PCID))
+		return;
+
+	if (!static_cpu_has(X86_FEATURE_INVPCID)) {
+		pvm_flush_hwtlb(vcpu);
+		return;
+	}
+
+	get_cpu();
+	if (!is_asid_clean(pvm)) {
+		put_cpu();
+		return;
+	}
+
+	for (i = 0; i < KVM_MMU_NUM_PREV_ROOTS; i++) {
+		if (VALID_PAGE(mmu->prev_roots[i].hpa)) {
+			u32 pcid = kvm_get_pcid(vcpu, mmu->prev_roots[i].pgd);
+			bool is_smod = !(root_to_sp(mmu->prev_roots[i].hpa)->role.word & ACC_USER_MASK);
+
+			invpcid_flush_one(guest_pcid_to_host_pcid(pvm, pcid, is_smod), addr);
+		}
+	}
+
+	put_cpu();
+}
+
+static void pvm_set_host_cr3_for_guest(struct vcpu_pvm *pvm)
+{
+	u64 hw_cr3 = __sme_set(pvm->vcpu.arch.mmu->root.hpa);
+
+	if (static_cpu_has(X86_FEATURE_PCID)) {
+		u32 pcid = pvm->vcpu.arch.cr3 & X86_CR3_PCID_MASK;
+
+		update_asid(pvm);
+
+		pcid = guest_pcid_to_host_pcid(pvm, pcid, is_smod(pvm));
+		hw_cr3 |= pcid;
+		if (!pvm->flush_hwtlb_current)
+			hw_cr3 |= CR3_NOFLUSH;
+		pvm->flush_hwtlb_current = false;
+
+		/*
+		 * if guest PCID is bigger than 7, use the fallback guest PCID
+		 * 0, which is assumed to always be force flushed.
+		 */
+		if (unlikely(!(pcid & PVM_GUEST_PCID_INDEX_MASK)))
+			hw_cr3 &= ~CR3_NOFLUSH;
+	}
+
+	this_cpu_write(cpu_tss_rw.tss_ex.enter_cr3, hw_cr3);
+}
+
 static void pvm_set_host_cr3_for_hypervisor(struct vcpu_pvm *pvm)
 {
 	unsigned long cr3;
@@ -363,7 +489,7 @@ static void pvm_set_host_cr3_for_hypervisor(struct vcpu_pvm *pvm)
 static void pvm_set_host_cr3(struct vcpu_pvm *pvm)
 {
 	pvm_set_host_cr3_for_hypervisor(pvm);
-	this_cpu_write(cpu_tss_rw.tss_ex.enter_cr3, pvm->vcpu.arch.mmu->root.hpa);
+	pvm_set_host_cr3_for_guest(pvm);
 }
 
 static void pvm_load_mmu_pgd(struct kvm_vcpu *vcpu, hpa_t root_hpa,
@@ -388,6 +514,9 @@ static void pvm_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 		return;
 
 	__this_cpu_write(active_pvm_vcpu, pvm);
+
+	if (vcpu->cpu != cpu)
+		pvm_flush_hwtlb(vcpu);
 
 	indirect_branch_prediction_barrier();
 }
@@ -1840,9 +1969,20 @@ static int pvm_vm_init(struct kvm *kvm)
 	return 0;
 }
 
+static void pvm_asid_data_init(void)
+{
+	struct pvm_asid_data *asid_data = this_cpu_ptr(&pvm_asid);
+
+	asid_data->asid_generation = PVM_ASID_GEN_INIT;
+	asid_data->max_asid = PVM_ASID_MAX;
+	asid_data->next_asid = PVM_ASID_MIN;
+	asid_data->min_asid = PVM_ASID_MIN;
+	__pvm_hwtlb_flush_all();
+}
+
 static int pvm_enable_virtualization_cpu(void)
 {
-	/* Nothing to do */
+	pvm_asid_data_init();
 	return 0;
 }
 
@@ -2031,6 +2171,11 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.set_rflags = pvm_set_rflags,
 	.get_if_flag = pvm_get_if_flag,
 
+	.flush_tlb_all = pvm_flush_hwtlb,
+	.flush_tlb_current = pvm_flush_hwtlb_current,
+	.flush_tlb_gva = pvm_flush_hwtlb_gva,
+	.flush_tlb_guest = pvm_flush_hwtlb,
+
 	.vcpu_pre_run = pvm_vcpu_pre_run,
 	.vcpu_run = pvm_vcpu_run,
 	.handle_exit = pvm_handle_exit,
@@ -2092,8 +2237,15 @@ static void pvm_exit(void)
 }
 module_exit(pvm_exit);
 
+#define TLB_NR_DYN_ASIDS	6
+
 static int __init hardware_cap_check(void)
 {
+	BUILD_BUG_ON(NUM_PVM_GUEST_PCID_INDEX <= TLB_NR_DYN_ASIDS);
+#ifdef CONFIG_PAGE_TABLE_ISOLATION
+	BUILD_BUG_ON(PVM_GUEST_PTI_PCID_BIT != X86_CR3_PTI_PCID_USER_BIT);
+#endif
+
 	/*
 	 * switcher can't be used when KPTI. See the comments above
 	 * SWITCHER_SAVE_AND_SWITCH_TO_HOST_CR3
