@@ -780,6 +780,32 @@ static void pvm_msr_filter_changed(struct kvm_vcpu *vcpu)
 	/* Accesses to MSRs are emulated in hypervisor, nothing to do here. */
 }
 
+static inline bool is_pvm_feature_control_msr_valid(struct vcpu_pvm *pvm,
+						    struct msr_data *msr_info)
+{
+	/*
+	 * currently only FEAT_CTL_LOCKED bit is valid, maybe
+	 * vmx, sgx and mce associated bits can be valid when those features
+	 * are supported for guest.
+	 */
+	u64 valid_bits = pvm->msr_ia32_feature_control_valid_bits;
+
+	if (!msr_info->host_initiated &&
+	    (pvm->msr_ia32_feature_control & FEAT_CTL_LOCKED))
+		return false;
+
+	return !(msr_info->data & ~valid_bits);
+}
+
+static void pvm_update_uret_msr(struct vcpu_pvm *pvm, unsigned int slot,
+				u64 data, u64 mask)
+{
+	preempt_disable();
+	if (pvm->loaded_cpu_state)
+		kvm_set_user_return_msr(slot, data, mask);
+	preempt_enable();
+}
+
 /*
  * Reads an msr value (of 'msr_index') into 'msr_info'.
  * Returns 0 on success, non-0 otherwise.
@@ -825,8 +851,17 @@ static int pvm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_IA32_SYSENTER_ESP:
 		msr_info->data = pvm->unused_MSR_IA32_SYSENTER_ESP;
 		break;
+	case MSR_TSC_AUX:
+		msr_info->data = pvm->msr_tsc_aux;
+		break;
 	case MSR_IA32_DEBUGCTLMSR:
 		msr_info->data = 0;
+		break;
+	case MSR_IA32_FEAT_CTL:
+		msr_info->data = pvm->msr_ia32_feature_control;
+		break;
+	case MSR_IA32_BNDCFGS:
+		msr_info->data = pvm->unused_MSR_IA32_BNDCFGS;
 		break;
 	case MSR_PVM_VCPU_STRUCT:
 		msr_info->data = pvm->msr_vcpu_struct;
@@ -902,8 +937,17 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_IA32_SYSENTER_ESP:
 		pvm->unused_MSR_IA32_SYSENTER_ESP = data;
 		break;
+	case MSR_TSC_AUX:
+		pvm->msr_tsc_aux = data;
+		pvm_update_uret_msr(pvm, 1, data, -1ull);
+		break;
 	case MSR_IA32_DEBUGCTLMSR:
 		/* It is ignored now. */
+		break;
+	case MSR_IA32_FEAT_CTL:
+		if (!is_intel || !is_pvm_feature_control_msr_valid(pvm, msr_info))
+			return 1;
+		pvm->msr_ia32_feature_control = data;
 		break;
 	case MSR_MISC_FEATURES_ENABLES:
 		ret = kvm_set_msr_common(vcpu, msr_info);
@@ -915,6 +959,21 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		     !boot_cpu_has(X86_FEATURE_CPUID_FAULT))
 			return 1;
 		ret = kvm_set_msr_common(vcpu, msr_info);
+		break;
+	case MSR_IA32_BNDCFGS:
+		if (!kvm_mpx_supported() ||
+		    (!msr_info->host_initiated &&
+		     !guest_cpuid_has(vcpu, X86_FEATURE_MPX)))
+			return 1;
+		if (is_noncanonical_address(data & PAGE_MASK, vcpu) ||
+		    (data & MSR_IA32_BNDCFGS_RSVD))
+			return 1;
+		/*
+		 * As the full MPX feature function has been deprecated in the
+		 * Linux kernel, it is acceptable to ignore supervisor mode MPX
+		 * control for simplicity.
+		 */
+		pvm->unused_MSR_IA32_BNDCFGS = data;
 		break;
 	case MSR_PVM_VCPU_STRUCT:
 		if (!PAGE_ALIGNED(data))
@@ -2587,6 +2646,12 @@ static __init void pvm_set_cpu_caps(void)
 	kvm_caps.supported_mce_cap = MCG_CTL_P | MCG_SER_P;
 
 	kvm_caps.supported_xss = 0;
+
+	/* Don't expose MSR_IA32_TSX_CTRL to guest for simplicity. */
+	kvm_host.arch_capabilities &= ~ARCH_CAP_TSX_CTRL_MSR;
+
+	if (kvm_mpx_supported())
+		kvm_cpu_cap_check_and_set(X86_FEATURE_MPX);
 
 	/* PVM supervisor mode runs on hardware ring3, so no xsaves. */
 	kvm_cpu_cap_clear(X86_FEATURE_XSAVES);
