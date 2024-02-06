@@ -1221,6 +1221,18 @@ static int handle_synthetic_instruction_return_supervisor(struct kvm_vcpu *vcpu)
 	return 1;
 }
 
+static int handle_kvm_hypercall(struct kvm_vcpu *vcpu)
+{
+	int r;
+
+	// In PVM, r10 is the replacement for rcx in hypercall
+	kvm_rcx_write(vcpu, kvm_r10_read(vcpu));
+	r = kvm_emulate_hypercall_noskip(vcpu);
+	kvm_r10_write(vcpu, kvm_rcx_read(vcpu));
+
+	return r;
+}
+
 static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
@@ -1233,7 +1245,8 @@ static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 		return handle_synthetic_instruction_return_user(vcpu);
 	if (rip == pvm->msr_rets_rip_plus2)
 		return handle_synthetic_instruction_return_supervisor(vcpu);
-	return 1;
+
+	return handle_kvm_hypercall(vcpu);
 }
 
 static int handle_exit_debug(struct kvm_vcpu *vcpu)
