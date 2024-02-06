@@ -1460,6 +1460,42 @@ static void pvm_flush_tlb_guest_current_kernel_user(struct kvm_vcpu *vcpu)
 }
 
 /*
+ * Hypercall: PVM_HC_LOAD_PGTBL
+ *	Load two PGDs into the current CR3 and MSR_PVM_SWITCH_CR3.
+ *
+ * Arguments:
+ *	flags:	bit0: flush the TLBs tagged with @pgd and @user_pgd.
+ *		bit1: 4 (bit1=0) or 5 (bit1=1 && cpuid_has(LA57)) level paging.
+ *	pgd: to be loaded into CR3.
+ *	user_pgd: to be loaded into MSR_PVM_SWITCH_CR3.
+ */
+static int handle_hc_load_pagetables(struct kvm_vcpu *vcpu, unsigned long flags,
+				     unsigned long pgd, unsigned long user_pgd)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	unsigned long cr4 = vcpu->arch.cr4;
+
+	if (!(flags & 2))
+		cr4 &= ~X86_CR4_LA57;
+	else if (guest_cpuid_has(vcpu, X86_FEATURE_LA57))
+		cr4 |= X86_CR4_LA57;
+
+	if (cr4 != vcpu->arch.cr4) {
+		vcpu->arch.cr4 = cr4;
+		kvm_mmu_reset_context(vcpu);
+	}
+
+	kvm_mmu_new_pgd(vcpu, pgd);
+	vcpu->arch.cr3 = pgd;
+	pvm->msr_switch_cr3 = user_pgd;
+
+	if (flags & 1)
+		pvm_flush_tlb_guest_current_kernel_user(vcpu);
+
+	return 1;
+}
+
+/*
  * Hypercall: PVM_HC_TLB_FLUSH
  *	Flush all TLBs.
  */
@@ -1540,7 +1576,7 @@ static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 	unsigned long rip = kvm_rip_read(vcpu);
-	unsigned long a0, a1;
+	unsigned long a0, a1, a2;
 
 	if (!is_smod(pvm))
 		return do_pvm_user_event(vcpu, PVM_SYSCALL_VECTOR, false, 0);
@@ -1552,6 +1588,7 @@ static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 
 	a0 = kvm_rbx_read(vcpu);
 	a1 = kvm_r10_read(vcpu);
+	a2 = kvm_rdx_read(vcpu);
 
 	// handle hypercall, check it for pvm hypercall and then kvm hypercall
 	switch (kvm_rax_read(vcpu)) {
@@ -1559,6 +1596,8 @@ static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 		return handle_hc_interrupt_window(vcpu);
 	case PVM_HC_IRQ_HALT:
 		return handle_hc_irq_halt(vcpu);
+	case PVM_HC_LOAD_PGTBL:
+		return handle_hc_load_pagetables(vcpu, a0, a1, a2);
 	case PVM_HC_TLB_FLUSH:
 		return handle_hc_flush_tlb_all(vcpu);
 	case PVM_HC_TLB_FLUSH_CURRENT:
