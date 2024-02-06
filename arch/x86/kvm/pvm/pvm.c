@@ -1279,6 +1279,86 @@ static int handle_synthetic_instruction_return_user(struct kvm_vcpu *vcpu)
 	return 1;
 }
 
+static int handle_hc_irq_window(struct kvm_vcpu *vcpu)
+{
+	kvm_make_request(KVM_REQ_EVENT, vcpu);
+	pvm_event_flags_update(vcpu, 0, PVM_EVENT_FLAGS_IP);
+
+	++vcpu->stat.irq_window_exits;
+	return 1;
+}
+
+static int handle_hc_irq_halt(struct kvm_vcpu *vcpu)
+{
+	kvm_set_rflags(vcpu, kvm_get_rflags(vcpu) | X86_EFLAGS_IF);
+
+	return kvm_emulate_halt_noskip(vcpu);
+}
+
+/*
+ * Hypercall: PVM_HC_TLB_FLUSH
+ *	Flush all TLBs.
+ */
+static int handle_hc_flush_tlb_all(struct kvm_vcpu *vcpu)
+{
+	kvm_make_request(KVM_REQ_TLB_FLUSH_GUEST, vcpu);
+
+	return 1;
+}
+
+/*
+ * Hypercall: PVM_HC_TLB_FLUSH_CURRENT
+ *	Flush all TLBs tagged with the current PCID.
+ */
+static int handle_hc_flush_tlb_current(struct kvm_vcpu *vcpu)
+{
+	kvm_set_cr3(vcpu, vcpu->arch.cr3);
+	return 1;
+}
+
+/*
+ * Hypercall: PVM_HC_TLB_INVLPG
+ *	Flush TLBs associated with a single address for all tags.
+ */
+static int handle_hc_invlpg(struct kvm_vcpu *vcpu, unsigned long addr)
+{
+	kvm_mmu_invlpg(vcpu, addr);
+
+	return 1;
+}
+
+/*
+ * Hypercall: PVM_HC_RDMSR
+ *	Write MSR.
+ *	Return with RAX = the MSR value if succeeded.
+ *	Return with RAX = 0 if it failed.
+ */
+static int handle_hc_rdmsr(struct kvm_vcpu *vcpu, u32 index)
+{
+	u64 value = 0;
+
+	kvm_get_msr(vcpu, index, &value);
+	kvm_rax_write(vcpu, value);
+
+	return 1;
+}
+
+/*
+ * Hypercall: PVM_HC_WRMSR
+ *	Write MSR.
+ *	Return with RAX = 0 if succeeded.
+ *	Return with RAX = -EIO if it failed
+ */
+static int handle_hc_wrmsr(struct kvm_vcpu *vcpu, u32 index, u64 value)
+{
+	if (kvm_set_msr(vcpu, index, value))
+		kvm_rax_write(vcpu, -EIO);
+	else
+		kvm_rax_write(vcpu, 0);
+
+	return 1;
+}
+
 static int handle_kvm_hypercall(struct kvm_vcpu *vcpu)
 {
 	int r;
@@ -1295,6 +1375,7 @@ static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 	unsigned long rip = kvm_rip_read(vcpu);
+	unsigned long a0, a1;
 
 	if (!is_smod(pvm))
 		return __do_pvm_event(vcpu, true, PVM_SYSCALL_VECTOR, false, 0);
@@ -1302,7 +1383,28 @@ static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 	if (rip == pvm->msr_retu_rip_plus2)
 		return handle_synthetic_instruction_return_user(vcpu);
 
-	return handle_kvm_hypercall(vcpu);
+	a0 = kvm_rbx_read(vcpu);
+	a1 = kvm_r10_read(vcpu);
+
+	// handle hypercall, check it for pvm hypercall and then kvm hypercall
+	switch (kvm_rax_read(vcpu)) {
+	case PVM_HC_IRQ_WIN:
+		return handle_hc_irq_window(vcpu);
+	case PVM_HC_IRQ_HALT:
+		return handle_hc_irq_halt(vcpu);
+	case PVM_HC_TLB_FLUSH:
+		return handle_hc_flush_tlb_all(vcpu);
+	case PVM_HC_TLB_FLUSH_CURRENT:
+		return handle_hc_flush_tlb_current(vcpu);
+	case PVM_HC_TLB_INVLPG:
+		return handle_hc_invlpg(vcpu, a0);
+	case PVM_HC_RDMSR:
+		return handle_hc_rdmsr(vcpu, a0);
+	case PVM_HC_WRMSR:
+		return handle_hc_wrmsr(vcpu, a0, a1);
+	default:
+		return handle_kvm_hypercall(vcpu);
+	}
 }
 
 static int handle_exit_debug(struct kvm_vcpu *vcpu)
