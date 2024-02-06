@@ -1153,12 +1153,86 @@ static void pvm_setup_mce(struct kvm_vcpu *vcpu)
 {
 }
 
+static int handle_synthetic_instruction_return_user(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	struct pvm_vcpu_struct *pvcs;
+
+	// instruction to return user means nmi allowed.
+	pvm->nmi_mask = false;
+
+	/*
+	 * switch to user mode before kvm_set_rflags() to avoid PVM_EVENT_FLAGS_IF
+	 * to be set.
+	 */
+	switch_to_umod(vcpu);
+
+	pvcs = pvm_get_vcpu_struct(pvm);
+	if (!pvcs) {
+		kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+		return 1;
+	}
+
+	/*
+	 * pvm_set_rflags() doesn't clear PVM_EVENT_FLAGS_IP
+	 * for user mode, so clear it here.
+	 */
+	if (pvcs->event_flags & PVM_EVENT_FLAGS_IP) {
+		pvcs->event_flags &= ~PVM_EVENT_FLAGS_IP;
+		kvm_make_request(KVM_REQ_EVENT, vcpu);
+	}
+
+	pvm->hw_cs = pvcs->user_cs | USER_RPL;
+	pvm->hw_ss = pvcs->user_ss | USER_RPL;
+
+	pvm_write_guest_gs_base(pvm, pvcs->user_gsbase);
+	kvm_set_rflags(vcpu, pvcs->eflags | X86_EFLAGS_IF);
+	kvm_rip_write(vcpu, pvcs->rip);
+	kvm_rsp_write(vcpu, pvcs->rsp);
+	kvm_rcx_write(vcpu, pvcs->rcx);
+	kvm_r11_write(vcpu, pvcs->r11);
+
+	pvm_put_vcpu_struct(pvm, false);
+
+	return 1;
+}
+
+static int handle_synthetic_instruction_return_supervisor(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	unsigned long rsp = kvm_rsp_read(vcpu);
+	struct pvm_supervisor_event frame;
+	struct x86_exception e;
+
+	if (kvm_read_guest_virt(vcpu, rsp, &frame, sizeof(frame), &e)) {
+		kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+		return 1;
+	}
+
+	// instruction to return supervisor means nmi allowed.
+	pvm->nmi_mask = false;
+
+	kvm_set_rflags(vcpu, frame.rflags);
+	kvm_rip_write(vcpu, frame.rip);
+	kvm_rsp_write(vcpu, frame.rsp);
+	kvm_rcx_write(vcpu, frame.rcx);
+	kvm_r11_write(vcpu, frame.r11);
+
+	return 1;
+}
+
 static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	unsigned long rip = kvm_rip_read(vcpu);
 
 	if (!is_smod(pvm))
 		return do_pvm_user_event(vcpu, PVM_SYSCALL_VECTOR, false, 0);
+
+	if (rip == pvm->msr_retu_rip_plus2)
+		return handle_synthetic_instruction_return_user(vcpu);
+	if (rip == pvm->msr_rets_rip_plus2)
+		return handle_synthetic_instruction_return_supervisor(vcpu);
 	return 1;
 }
 
