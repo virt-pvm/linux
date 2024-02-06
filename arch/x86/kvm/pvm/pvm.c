@@ -281,6 +281,26 @@ static void segments_save_guest_and_switch_to_host(struct vcpu_pvm *pvm)
 	wrmsrl(MSR_FS_BASE, current->thread.fsbase);
 }
 
+/*
+ * Load guest TLS entries into the GDT.
+ */
+static inline void host_gdt_set_tls(struct vcpu_pvm *pvm)
+{
+	struct desc_struct *gdt = get_current_gdt_rw();
+	unsigned int i;
+
+	for (i = 0; i < GDT_ENTRY_TLS_ENTRIES; i++)
+		gdt[GDT_ENTRY_TLS_MIN + i] = pvm->tls_array[i];
+}
+
+/*
+ * Load current task's TLS into the GDT.
+ */
+static inline void host_gdt_restore_tls(void)
+{
+	native_load_tls(&current->thread, smp_processor_id());
+}
+
 static void pvm_prepare_switch_to_guest(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
@@ -303,6 +323,8 @@ static void pvm_prepare_switch_to_guest(struct kvm_vcpu *vcpu)
 	if (test_thread_flag(TIF_IO_BITMAP))
 		native_tss_invalidate_io_bitmap();
 #endif
+
+	host_gdt_set_tls(pvm);
 
 #ifdef CONFIG_MODIFY_LDT_SYSCALL
 	/* PVM doesn't support LDT. */
@@ -333,6 +355,8 @@ static void pvm_prepare_switch_to_host(struct vcpu_pvm *pvm)
 	if (unlikely(current->mm->context.ldt))
 		kvm_load_ldt(GDT_ENTRY_LDT*8);
 #endif
+
+	host_gdt_restore_tls();
 
 	segments_save_guest_and_switch_to_host(pvm);
 	pvm->loaded_cpu_state = 0;
@@ -1629,6 +1653,60 @@ static int handle_hc_wrmsr(struct kvm_vcpu *vcpu, u32 index, u64 value)
 	return 1;
 }
 
+// Check if the tls desc is allowed on the host GDT.
+// The same logic as tls_desc_okay() in arch/x86/kernel/tls.c.
+static bool tls_desc_okay(struct desc_struct *desc)
+{
+	// Only allow present segments.
+	if (!desc->p)
+		return false;
+
+	// Only allow data segments.
+	if (desc->type & (1 << 3))
+		return false;
+
+	// Only allow 32-bit data segments.
+	if (!desc->d)
+		return false;
+
+	return true;
+}
+
+/*
+ * Hypercall: PVM_HC_LOAD_TLS
+ *	Load guest TLS desc into host GDT.
+ */
+static int handle_hc_load_tls(struct kvm_vcpu *vcpu, unsigned long tls_desc_0,
+			      unsigned long tls_desc_1, unsigned long tls_desc_2)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	unsigned long *tls_array = (unsigned long *)&pvm->tls_array[0];
+	int i;
+
+	tls_array[0] = tls_desc_0;
+	tls_array[1] = tls_desc_1;
+	tls_array[2] = tls_desc_2;
+
+	for (i = 0; i < GDT_ENTRY_TLS_ENTRIES; i++) {
+		if (!tls_desc_okay(&pvm->tls_array[i])) {
+			pvm->tls_array[i] = (struct desc_struct){0};
+			continue;
+		}
+		/* Standarding TLS descs, same as fill_ldt(). */
+		pvm->tls_array[i].type |= 1;
+		pvm->tls_array[i].s = 1;
+		pvm->tls_array[i].dpl = 0x3;
+		pvm->tls_array[i].l = 0;
+	}
+
+	preempt_disable();
+	if (pvm->loaded_cpu_state)
+		host_gdt_set_tls(pvm);
+	preempt_enable();
+
+	return 1;
+}
+
 static int handle_kvm_hypercall(struct kvm_vcpu *vcpu)
 {
 	int r;
@@ -1679,6 +1757,8 @@ static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 		return handle_hc_rdmsr(vcpu, a0);
 	case PVM_HC_WRMSR:
 		return handle_hc_wrmsr(vcpu, a0, a1);
+	case PVM_HC_LOAD_TLS:
+		return handle_hc_load_tls(vcpu, a0, a1, a2);
 	default:
 		return handle_kvm_hypercall(vcpu);
 	}
@@ -2296,6 +2376,7 @@ static void pvm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 	pvm->hw_ss = __USER_DS;
 	pvm->int_shadow = 0;
 	pvm->nmi_mask = false;
+	memset(&pvm->tls_array[0], 0, sizeof(pvm->tls_array));
 
 	pvm->msr_vcpu_struct = 0;
 	pvm->msr_supervisor_rsp = 0;
