@@ -725,6 +725,28 @@ static int pvm_check_intercept(struct kvm_vcpu *vcpu,
 	return X86EMUL_CONTINUE;
 }
 
+static u64 pvm_get_l2_tsc_offset(struct kvm_vcpu *vcpu)
+{
+	return 0;
+}
+
+static u64 pvm_get_l2_tsc_multiplier(struct kvm_vcpu *vcpu)
+{
+	return 0;
+}
+
+static void pvm_write_tsc_offset(struct kvm_vcpu *vcpu)
+{
+	// TODO: add proper ABI and make guest use host TSC
+	vcpu->arch.tsc_offset = 0;
+	vcpu->arch.l1_tsc_offset = 0;
+}
+
+static void pvm_write_tsc_multiplier(struct kvm_vcpu *vcpu)
+{
+	// TODO: add proper ABI and make guest use host TSC
+}
+
 static void pvm_set_msr_linear_address_range(struct vcpu_pvm *pvm,
 					     u64 pml4_i_s, u64 pml4_i_e,
 					     u64 pml5_i_s, u64 pml5_i_e)
@@ -2776,6 +2798,10 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.complete_emulated_msr = kvm_complete_insn_gp,
 	.vcpu_deliver_sipi_vector = kvm_vcpu_deliver_sipi_vector,
 
+	.get_l2_tsc_offset = pvm_get_l2_tsc_offset,
+	.get_l2_tsc_multiplier = pvm_get_l2_tsc_multiplier,
+	.write_tsc_offset = pvm_write_tsc_offset,
+	.write_tsc_multiplier = pvm_write_tsc_multiplier,
 	.check_emulate_instruction = pvm_check_emulate_instruction,
 	.disallowed_va = pvm_disallowed_va,
 	.vcpu_gpc_refresh = pvm_vcpu_gpc_refresh,
