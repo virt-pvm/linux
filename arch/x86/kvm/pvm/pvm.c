@@ -561,6 +561,9 @@ static int pvm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_PVM_EVENT_ENTRY:
 		msr_info->data = pvm->msr_event_entry;
 		break;
+	case MSR_PVM_RETU_RIP:
+		msr_info->data = pvm->msr_retu_rip_plus2 - 2;
+		break;
 	case MSR_PVM_LINEAR_ADDRESS_RANGE:
 		msr_info->data = pvm->msr_linear_address_range;
 		break;
@@ -660,6 +663,9 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 			return 1;
 		}
 		pvm->msr_event_entry = msr_info->data;
+		break;
+	case MSR_PVM_RETU_RIP:
+		pvm->msr_retu_rip_plus2 = msr_info->data + 2;
 		break;
 	case MSR_PVM_LINEAR_ADDRESS_RANGE:
 		if (!pvm_check_and_set_msr_linear_address_range(pvm, msr_info->data))
@@ -1100,12 +1106,60 @@ static void pvm_setup_mce(struct kvm_vcpu *vcpu)
 {
 }
 
+static int handle_synthetic_instruction_return_user(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	struct pvm_vcpu_struct *pvcs;
+	unsigned long rflags;
+	u32 pending_async_exceptions;
+
+	/* switch to user mode before rsp changed. */
+	switch_to_umod(vcpu);
+
+	pvcs = pvm_get_vcpu_struct(pvm);
+	if (!pvcs) {
+		kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+		return 1;
+	}
+
+	pending_async_exceptions = pvcs->event_vector;
+	pvcs->event_vector = PVM_PVCS_EVENT_VECTOR_STD; // Clear other bits
+
+	kvm_rip_write(vcpu, pvcs->rip);
+	kvm_rcx_write(vcpu, pvcs->rcx);
+	kvm_r11_write(vcpu, pvcs->r11);
+	rflags = pvcs->eflags;
+
+	pvm->hw_cs = pvcs->user_cs | USER_RPL;
+	pvm->hw_ss = pvcs->user_ss | USER_RPL;
+	pvm_write_guest_gs_base(pvm, pvcs->user_gsbase);
+
+	pvm_put_vcpu_struct(pvm, true);
+
+	// Don't call kvm_set_rflags() with pvm_get_vcpu_struct() held
+	// which might be nesting the lock in pvm_set_rflags().
+	// Avoid using bare code to set pvm->rflags, kvm_set_rflags() can
+	// handle guest debug, pvcs->event_flags, pvm->switch_flags.
+	kvm_set_rflags(vcpu, rflags);
+
+	if (pending_async_exceptions & PVM_PVCS_EVENT_VECTOR_MCE)
+		do_pvm_event(vcpu, MC_VECTOR, false, 0);
+	if (pending_async_exceptions & PVM_PVCS_EVENT_VECTOR_NMI)
+		do_pvm_event(vcpu, NMI_VECTOR, false, 0);
+
+	return 1;
+}
+
 static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	unsigned long rip = kvm_rip_read(vcpu);
 
 	if (!is_smod(pvm))
 		return __do_pvm_event(vcpu, true, PVM_SYSCALL_VECTOR, false, 0);
+
+	if (rip == pvm->msr_retu_rip_plus2)
+		return handle_synthetic_instruction_return_user(vcpu);
 	return 1;
 }
 
@@ -1707,6 +1761,7 @@ static void pvm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 
 	pvm->msr_vcpu_struct = 0;
 	pvm->msr_event_entry = 0;
+	pvm->msr_retu_rip_plus2 = 0;
 	pvm_set_default_msr_linear_address_range(pvm);
 }
 
