@@ -8,6 +8,8 @@
 #include <asm/clocksource.h>
 #include <asm/pvclock-abi.h>
 
+#include "pvm/pvm.h"
+
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM kvm
 
@@ -282,11 +284,14 @@ TRACE_EVENT(kvm_apic,
 
 #define KVM_ISA_VMX   1
 #define KVM_ISA_SVM   2
+#define KVM_ISA_PVM   3
 
 #define kvm_print_exit_reason(exit_reason, isa)				\
 	(isa == KVM_ISA_VMX) ?						\
 	__print_symbolic(exit_reason & 0xffff, VMX_EXIT_REASONS) :	\
-	__print_symbolic(exit_reason, SVM_EXIT_REASONS),		\
+	((isa == KVM_ISA_SVM) ?						\
+	__print_symbolic(exit_reason, SVM_EXIT_REASONS) :		\
+	__print_symbolic(exit_reason, PVM_EXIT_REASONS)),		\
 	(isa == KVM_ISA_VMX && exit_reason & ~0xffff) ? " " : "",	\
 	(isa == KVM_ISA_VMX) ?						\
 	__print_flags(exit_reason & ~0xffff, " ", VMX_EXIT_REASON_FLAGS) : ""

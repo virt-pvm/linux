@@ -1996,6 +1996,43 @@ static int pvm_handle_exit(struct kvm_vcpu *vcpu, fastpath_t exit_fastpath)
 	return 0;
 }
 
+static u32 pvm_get_syscall_exit_reason(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	unsigned long rip = kvm_rip_read(vcpu);
+
+	if (is_smod(pvm)) {
+		if (rip == pvm->msr_retu_rip_plus2)
+			return PVM_EXIT_REASONS_ERETU;
+		else if (rip == pvm->msr_rets_rip_plus2)
+			return PVM_EXIT_REASONS_ERETS;
+		else
+			return PVM_EXIT_REASONS_HYPERCALL;
+	}
+
+	return PVM_EXIT_REASONS_SYSCALL;
+}
+
+static void pvm_get_exit_info(struct kvm_vcpu *vcpu, u32 *reason, u64 *info1, u64 *info2,
+			      u32 *intr_info, u32 *error_code)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	if (pvm->exit_vector == PVM_SYSCALL_VECTOR)
+		*reason = pvm_get_syscall_exit_reason(vcpu);
+	else if (pvm->exit_vector == IA32_SYSCALL_VECTOR)
+		*reason = PVM_EXIT_REASONS_INT80;
+	else if (pvm->exit_vector >= FIRST_EXTERNAL_VECTOR &&
+		 pvm->exit_vector < NR_VECTORS)
+		*reason = PVM_EXIT_REASONS_INTERRUPT;
+	else
+		*reason = pvm->exit_vector;
+	*info1 = pvm->exit_vector;
+	*info2 = pvm->exit_error_code;
+	*intr_info = pvm->exit_vector;
+	*error_code = pvm->exit_error_code;
+}
+
 static void pvm_handle_exit_irqoff(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
@@ -2297,6 +2334,8 @@ static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu)
 
 	mark_page_dirty_in_slot(vcpu->kvm, pvm->pvcs_gpc.memslot,
 				pvm->pvcs_gpc.gpa >> PAGE_SHIFT);
+
+	trace_kvm_exit(vcpu, KVM_ISA_PVM);
 
 	return EXIT_FASTPATH_NONE;
 }
@@ -2626,6 +2665,8 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.enable_irq_window = enable_irq_window,
 	.refresh_apicv_exec_ctrl = pvm_refresh_apicv_exec_ctrl,
 	.deliver_interrupt = pvm_deliver_interrupt,
+
+	.get_exit_info = pvm_get_exit_info,
 
 	.vcpu_after_set_cpuid = pvm_vcpu_after_set_cpuid,
 
