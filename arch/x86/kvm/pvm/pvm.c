@@ -630,11 +630,131 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	return ret;
 }
 
+static void pvm_get_segment(struct kvm_vcpu *vcpu,
+			    struct kvm_segment *var, int seg)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	// Update CS or SS to reflect the current mode.
+	if (seg == VCPU_SREG_CS) {
+		if (is_smod(pvm)) {
+			pvm->segments[seg].selector = kernel_cs_by_msr(pvm->msr_star);
+			pvm->segments[seg].dpl = 0;
+			pvm->segments[seg].l = 1;
+			pvm->segments[seg].db = 0;
+		} else {
+			pvm->segments[seg].selector = pvm->hw_cs >> 3;
+			pvm->segments[seg].dpl = 3;
+			if (pvm->hw_cs == __USER_CS) {
+				pvm->segments[seg].l = 1;
+				pvm->segments[seg].db = 0;
+			} else { // __USER32_CS
+				pvm->segments[seg].l = 0;
+				pvm->segments[seg].db = 1;
+			}
+		}
+	} else if (seg == VCPU_SREG_SS) {
+		if (is_smod(pvm)) {
+			pvm->segments[seg].dpl = 0;
+			pvm->segments[seg].selector = kernel_ds_by_msr(pvm->msr_star);
+		} else {
+			pvm->segments[seg].dpl = 3;
+			pvm->segments[seg].selector = pvm->hw_ss >> 3;
+		}
+	}
+
+	// Update DS/ES/FS/GS states from the hardware when the states are loaded.
+	pvm_switch_to_host(pvm);
+	*var = pvm->segments[seg];
+}
+
+static u64 pvm_get_segment_base(struct kvm_vcpu *vcpu, int seg)
+{
+	struct kvm_segment var;
+
+	pvm_get_segment(vcpu, &var, seg);
+	return var.base;
+}
+
 static int pvm_get_cpl(struct kvm_vcpu *vcpu)
 {
 	if (is_smod(to_pvm(vcpu)))
 		return 0;
 	return 3;
+}
+
+static void pvm_set_segment(struct kvm_vcpu *vcpu, struct kvm_segment *var, int seg)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	int cpl = pvm_get_cpl(vcpu);
+
+	// Unload DS/ES/FS/GS states from hardware before changing them.
+	// It also has to unload the VCPU when leaving PVM mode.
+	pvm_switch_to_host(pvm);
+	pvm->segments[seg] = *var;
+
+	switch (seg) {
+	case VCPU_SREG_CS:
+		if (var->dpl == 1 || var->dpl == 2)
+			goto invalid_change;
+		if (!kvm_vcpu_has_run(vcpu)) {
+			// CPL changing is only valid for the first changed
+			// after the vcpu is created (vm-migration).
+			if (cpl != var->dpl)
+				pvm_switch_flags_toggle_mod(pvm);
+		} else {
+			if (cpl != var->dpl)
+				goto invalid_change;
+			if (cpl == 0 && !var->l)
+				goto invalid_change;
+		}
+		break;
+	case VCPU_SREG_LDTR:
+		// pvm doesn't support LDT
+		if (var->selector)
+			goto invalid_change;
+		break;
+	default:
+		break;
+	}
+
+	return;
+
+invalid_change:
+	kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+}
+
+static void pvm_get_cs_db_l_bits(struct kvm_vcpu *vcpu, int *db, int *l)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	if (pvm->hw_cs == __USER_CS) {
+		*db = 0;
+		*l = 1;
+	} else {
+		*db = 1;
+		*l = 0;
+	}
+}
+
+static void pvm_get_idt(struct kvm_vcpu *vcpu, struct desc_ptr *dt)
+{
+	*dt = to_pvm(vcpu)->idt_ptr;
+}
+
+static void pvm_set_idt(struct kvm_vcpu *vcpu, struct desc_ptr *dt)
+{
+	to_pvm(vcpu)->idt_ptr = *dt;
+}
+
+static void pvm_get_gdt(struct kvm_vcpu *vcpu, struct desc_ptr *dt)
+{
+	*dt = to_pvm(vcpu)->gdt_ptr;
+}
+
+static void pvm_set_gdt(struct kvm_vcpu *vcpu, struct desc_ptr *dt)
+{
+	to_pvm(vcpu)->gdt_ptr = *dt;
 }
 
 static void pvm_deliver_interrupt(struct kvm_lapic *apic, int delivery_mode,
@@ -1545,8 +1665,16 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.get_msr_feature = pvm_get_msr_feature,
 	.get_msr = pvm_get_msr,
 	.set_msr = pvm_set_msr,
+	.get_segment_base = pvm_get_segment_base,
+	.get_segment = pvm_get_segment,
+	.set_segment = pvm_set_segment,
 	.get_cpl = pvm_get_cpl,
+	.get_cs_db_l_bits = pvm_get_cs_db_l_bits,
 	.load_mmu_pgd = pvm_load_mmu_pgd,
+	.get_gdt = pvm_get_gdt,
+	.set_gdt = pvm_set_gdt,
+	.get_idt = pvm_get_idt,
+	.set_idt = pvm_set_idt,
 	.get_rflags = pvm_get_rflags,
 	.set_rflags = pvm_set_rflags,
 	.get_if_flag = pvm_get_if_flag,
