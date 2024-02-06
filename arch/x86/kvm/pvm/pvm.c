@@ -349,6 +349,211 @@ static void pvm_switch_to_host(struct vcpu_pvm *pvm)
 	preempt_enable();
 }
 
+struct host_pcid_one {
+	/*
+	 * It is struct vcpu_pvm *pvm, but it is not allowed to be
+	 * dereferenced since it might be freed.
+	 */
+	void *pvm;
+	u64 root_hpa;
+};
+
+struct host_pcid_state {
+	struct host_pcid_one pairs[NUM_HOST_PCID_FOR_GUEST];
+	int evict_next_round_robin;
+};
+
+static DEFINE_PER_CPU(struct host_pcid_state, pvm_tlb_state);
+
+static void host_pcid_flush_all(struct vcpu_pvm *pvm)
+{
+	struct host_pcid_state *tlb_state = this_cpu_ptr(&pvm_tlb_state);
+	int i;
+
+	for (i = 0; i < NUM_HOST_PCID_FOR_GUEST; i++) {
+		if (tlb_state->pairs[i].pvm == pvm)
+			tlb_state->pairs[i].pvm = NULL;
+	}
+}
+
+static inline unsigned int host_pcid_to_index(unsigned int host_pcid)
+{
+	return host_pcid & ~HOST_PCID_TAG_FOR_GUEST;
+}
+
+static inline int index_to_host_pcid(int index)
+{
+	return index | HOST_PCID_TAG_FOR_GUEST;
+}
+
+/*
+ * Free the uncached guest pcid (not in mmu->root nor mmu->prev_root), so
+ * that the next allocation would not evict a clean one.
+ *
+ * It would be better if kvm.ko notifies us when a root_pgd is freed
+ * from the cache.
+ *
+ * Returns a freed index or -1 if nothing is freed.
+ */
+static int host_pcid_free_uncached(struct vcpu_pvm *pvm)
+{
+	/* It is allowed to do nothing. */
+	return -1;
+}
+
+/*
+ * Get a host pcid of the current pCPU for the specific guest pgd.
+ * PVM vTLB is guest pgd tagged.
+ */
+static int host_pcid_get(struct vcpu_pvm *pvm, u64 root_hpa, bool *flush)
+{
+	struct host_pcid_state *tlb_state = this_cpu_ptr(&pvm_tlb_state);
+	int i, j = -1;
+
+	/* find if it is allocated. */
+	for (i = 0; i < NUM_HOST_PCID_FOR_GUEST; i++) {
+		struct host_pcid_one *tlb = &tlb_state->pairs[i];
+
+		if (tlb->root_hpa == root_hpa && tlb->pvm == pvm)
+			return index_to_host_pcid(i);
+
+		/* if it has no owner, allocate it if not found. */
+		if (!tlb->pvm)
+			j = i;
+	}
+
+	/*
+	 * Fallback to:
+	 *    use the fallback recorded in the above loop.
+	 *    use a freed uncached.
+	 *    evict one (which might be still usable) by round-robin policy.
+	 */
+	if (j < 0)
+		j = host_pcid_free_uncached(pvm);
+	if (j < 0) {
+		j = tlb_state->evict_next_round_robin;
+		if (++tlb_state->evict_next_round_robin == NUM_HOST_PCID_FOR_GUEST)
+			tlb_state->evict_next_round_robin = 0;
+	}
+
+	/* associate the host pcid to the guest */
+	tlb_state->pairs[j].pvm = pvm;
+	tlb_state->pairs[j].root_hpa = root_hpa;
+
+	*flush = true;
+	return index_to_host_pcid(j);
+}
+
+static void host_pcid_free(struct vcpu_pvm *pvm, u64 root_hpa)
+{
+	struct host_pcid_state *tlb_state = this_cpu_ptr(&pvm_tlb_state);
+	int i;
+
+	for (i = 0; i < NUM_HOST_PCID_FOR_GUEST; i++) {
+		struct host_pcid_one *tlb = &tlb_state->pairs[i];
+
+		if (tlb->root_hpa == root_hpa && tlb->pvm == pvm) {
+			tlb->pvm = NULL;
+			return;
+		}
+	}
+}
+
+static inline void *host_pcid_owner(int host_pcid)
+{
+	return this_cpu_read(pvm_tlb_state.pairs[host_pcid_to_index(host_pcid)].pvm);
+}
+
+static inline u64 host_pcid_root(int host_pcid)
+{
+	return this_cpu_read(pvm_tlb_state.pairs[host_pcid_to_index(host_pcid)].root_hpa);
+}
+
+static void __pvm_hwtlb_flush_all(struct vcpu_pvm *pvm)
+{
+	if (static_cpu_has(X86_FEATURE_PCID))
+		host_pcid_flush_all(pvm);
+}
+
+static void pvm_flush_hwtlb(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	get_cpu();
+	__pvm_hwtlb_flush_all(pvm);
+	put_cpu();
+}
+
+static void pvm_flush_hwtlb_guest(struct kvm_vcpu *vcpu)
+{
+	/*
+	 * flushing hwtlb for guest only when:
+	 *	change to the shadow page table.
+	 *	reused an used (guest) pcid.
+	 * change to the shadow page table always results flushing hwtlb
+	 * and PVM uses pgd tagged tlb.
+	 *
+	 * So no hwtlb needs to be flushed here.
+	 */
+}
+
+static void pvm_flush_hwtlb_current(struct kvm_vcpu *vcpu)
+{
+	/* No flush required if the current context is invalid. */
+	if (!VALID_PAGE(vcpu->arch.mmu->root.hpa))
+		return;
+
+	if (static_cpu_has(X86_FEATURE_PCID)) {
+		get_cpu();
+		host_pcid_free(to_pvm(vcpu), vcpu->arch.mmu->root.hpa);
+		put_cpu();
+	}
+}
+
+static void pvm_flush_hwtlb_gva(struct kvm_vcpu *vcpu, gva_t addr)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	int max = MIN_HOST_PCID_FOR_GUEST + NUM_HOST_PCID_FOR_GUEST;
+	int i;
+
+	if (!static_cpu_has(X86_FEATURE_PCID))
+		return;
+
+	get_cpu();
+	if (!this_cpu_has(X86_FEATURE_INVPCID)) {
+		host_pcid_flush_all(pvm);
+		put_cpu();
+		return;
+	}
+
+	host_pcid_free_uncached(pvm);
+	for (i = MIN_HOST_PCID_FOR_GUEST; i < max; i++) {
+		if (host_pcid_owner(i) == pvm)
+			invpcid_flush_one(i, addr);
+	}
+
+	put_cpu();
+}
+
+static void pvm_set_host_cr3_for_guest_with_host_pcid(struct vcpu_pvm *pvm)
+{
+	u64 root_hpa = pvm->vcpu.arch.mmu->root.hpa;
+	bool flush = false;
+	u32 host_pcid = host_pcid_get(pvm, root_hpa, &flush);
+	u64 hw_cr3 = root_hpa | host_pcid;
+
+	if (!flush)
+		hw_cr3 |= CR3_NOFLUSH;
+	this_cpu_write(cpu_tss_rw.tss_ex.enter_cr3, hw_cr3);
+}
+
+static void pvm_set_host_cr3_for_guest_without_host_pcid(struct vcpu_pvm *pvm)
+{
+	u64 root_hpa = pvm->vcpu.arch.mmu->root.hpa;
+
+	this_cpu_write(cpu_tss_rw.tss_ex.enter_cr3, root_hpa);
+}
+
 static void pvm_set_host_cr3_for_hypervisor(struct vcpu_pvm *pvm)
 {
 	unsigned long cr3;
@@ -365,7 +570,11 @@ static void pvm_set_host_cr3_for_hypervisor(struct vcpu_pvm *pvm)
 static void pvm_set_host_cr3(struct vcpu_pvm *pvm)
 {
 	pvm_set_host_cr3_for_hypervisor(pvm);
-	this_cpu_write(cpu_tss_rw.tss_ex.enter_cr3, pvm->vcpu.arch.mmu->root.hpa);
+
+	if (static_cpu_has(X86_FEATURE_PCID))
+		pvm_set_host_cr3_for_guest_with_host_pcid(pvm);
+	else
+		pvm_set_host_cr3_for_guest_without_host_pcid(pvm);
 }
 
 static void pvm_load_mmu_pgd(struct kvm_vcpu *vcpu, hpa_t root_hpa,
@@ -391,6 +600,9 @@ static void pvm_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 
 	__this_cpu_write(active_pvm_vcpu, pvm);
 
+	if (vcpu->cpu != cpu)
+		__pvm_hwtlb_flush_all(pvm);
+
 	indirect_branch_prediction_barrier();
 }
 
@@ -398,6 +610,7 @@ static void pvm_vcpu_put(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 
+	host_pcid_free_uncached(pvm);
 	pvm_prepare_switch_to_host(pvm);
 }
 
@@ -2086,6 +2299,11 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.set_rflags = pvm_set_rflags,
 	.get_if_flag = pvm_get_if_flag,
 
+	.flush_tlb_all = pvm_flush_hwtlb,
+	.flush_tlb_current = pvm_flush_hwtlb_current,
+	.flush_tlb_gva = pvm_flush_hwtlb_gva,
+	.flush_tlb_guest = pvm_flush_hwtlb_guest,
+
 	.vcpu_pre_run = pvm_vcpu_pre_run,
 	.vcpu_run = pvm_vcpu_run,
 	.handle_exit = pvm_handle_exit,
@@ -2152,8 +2370,16 @@ static void pvm_exit(void)
 }
 module_exit(pvm_exit);
 
+#define TLB_NR_DYN_ASIDS	6
+
 static int __init hardware_cap_check(void)
 {
+	BUILD_BUG_ON(MIN_HOST_PCID_FOR_GUEST <= TLB_NR_DYN_ASIDS);
+#ifdef CONFIG_PAGE_TABLE_ISOLATION
+	BUILD_BUG_ON((MIN_HOST_PCID_FOR_GUEST + NUM_HOST_PCID_FOR_GUEST) >=
+		     (1 << X86_CR3_PTI_PCID_USER_BIT));
+#endif
+
 	/*
 	 * switcher can't be used when KPTI. See the comments above
 	 * SWITCHER_SAVE_AND_SWITCH_TO_HOST_CR3
