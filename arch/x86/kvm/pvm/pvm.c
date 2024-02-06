@@ -1529,6 +1529,75 @@ static int handle_hc_invlpg(struct kvm_vcpu *vcpu, unsigned long addr)
 }
 
 /*
+ * Hypercall: PVM_HC_LOAD_GS
+ *	Load %gs with the selector %rdi and load the resulted base address
+ *	into RAX.
+ *
+ *	If %rdi is an invalid selector (including RPL != 3), NULL selector
+ *	will be used instead.
+ *
+ *	Return the resulted GS BASE in vCPU's RAX.
+ */
+static int handle_hc_load_gs(struct kvm_vcpu *vcpu, unsigned short sel)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	unsigned long guest_kernel_gs_base;
+
+	/* Use NULL selector if RPL != 3. */
+	if (sel != 0 && (sel & 3) != 3)
+		sel = 0;
+
+	/* Protect the guest state on the hardware. */
+	preempt_disable();
+
+	/*
+	 * Switch to the guest state because the CPU is going to set the %gs to
+	 * the guest value.  Save the original guest MSR_GS_BASE if it is
+	 * already the guest state.
+	 */
+	if (!pvm->loaded_cpu_state)
+		pvm_prepare_switch_to_guest(vcpu);
+	else
+		__save_gs_base(pvm);
+
+	/*
+	 * Load sel into %gs, which also changes the hardware MSR_KERNEL_GS_BASE.
+	 *
+	 * Before load_gs_index(sel):
+	 *	hardware %gs:			old gs index
+	 *	hardware MSR_KERNEL_GS_BASE:	guest MSR_GS_BASE
+	 *
+	 * After load_gs_index(sel);
+	 *	hardware %gs:			resulted %gs, @sel or NULL
+	 *	hardware MSR_KERNEL_GS_BASE:	resulted GS BASE
+	 *
+	 * The resulted %gs is the new guest %gs and will be saved into
+	 * pvm->segments[VCPU_SREG_GS].selector later when the CPU is
+	 * switching to host or the guest %gs is read (pvm_get_segment()).
+	 *
+	 * The resulted hardware MSR_KERNEL_GS_BASE will be returned via RAX
+	 * to the guest and the hardware MSR_KERNEL_GS_BASE, which represents
+	 * the guest MSR_GS_BASE when in VM-Exit state, is restored back to
+	 * the guest MSR_GS_BASE.
+	 */
+	load_gs_index(sel);
+
+	/* Get the resulted guest MSR_KERNEL_GS_BASE. */
+	rdmsrl(MSR_KERNEL_GS_BASE, guest_kernel_gs_base);
+
+	/* Restore the guest MSR_GS_BASE into the hardware MSR_KERNEL_GS_BASE. */
+	__load_gs_base(pvm);
+
+	/* Finished access to the guest state on the hardware. */
+	preempt_enable();
+
+	/* Return RAX with the resulted GS BASE. */
+	kvm_rax_write(vcpu, guest_kernel_gs_base);
+
+	return 1;
+}
+
+/*
  * Hypercall: PVM_HC_RDMSR
  *	Write MSR.
  *	Return with RAX = the MSR value if succeeded.
@@ -1604,6 +1673,8 @@ static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 		return handle_hc_flush_tlb_current_kernel_user(vcpu);
 	case PVM_HC_TLB_INVLPG:
 		return handle_hc_invlpg(vcpu, a0);
+	case PVM_HC_LOAD_GS:
+		return handle_hc_load_gs(vcpu, a0);
 	case PVM_HC_RDMSR:
 		return handle_hc_rdmsr(vcpu, a0);
 	case PVM_HC_WRMSR:
