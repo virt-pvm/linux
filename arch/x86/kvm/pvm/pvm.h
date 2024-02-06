@@ -98,6 +98,7 @@ struct vcpu_pvm {
 	struct kvm_segment segments[NR_VCPU_SREG];
 	struct desc_ptr idt_ptr;
 	struct desc_ptr gdt_ptr;
+	struct desc_struct tls_array[GDT_ENTRY_TLS_ENTRIES];
 };
 
 struct kvm_pvm {
