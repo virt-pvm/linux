@@ -1088,6 +1088,51 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	return ret;
 }
 
+static void pvm_cache_reg(struct kvm_vcpu *vcpu, enum kvm_reg reg)
+{
+	/* Nothing to do */
+}
+
+static int pvm_set_efer(struct kvm_vcpu *vcpu, u64 efer)
+{
+	vcpu->arch.efer = efer;
+
+	return 0;
+}
+
+static bool pvm_is_valid_cr0(struct kvm_vcpu *vcpu, unsigned long cr4)
+{
+	return true;
+}
+
+static void pvm_set_cr0(struct kvm_vcpu *vcpu, unsigned long cr0)
+{
+	if (vcpu->arch.efer & EFER_LME) {
+		if (!is_paging(vcpu) && (cr0 & X86_CR0_PG))
+			vcpu->arch.efer |= EFER_LMA;
+
+		if (is_paging(vcpu) && !(cr0 & X86_CR0_PG))
+			vcpu->arch.efer &= ~EFER_LMA;
+	}
+
+	vcpu->arch.cr0 = cr0;
+}
+
+static bool pvm_is_valid_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+{
+	return true;
+}
+
+static void pvm_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+{
+	unsigned long old_cr4 = vcpu->arch.cr4;
+
+	vcpu->arch.cr4 = cr4;
+
+	if ((cr4 ^ old_cr4) & (X86_CR4_OSXSAVE | X86_CR4_PKE))
+		kvm_update_cpuid_runtime(vcpu);
+}
+
 static void pvm_get_segment(struct kvm_vcpu *vcpu,
 			    struct kvm_segment *var, int seg)
 {
@@ -2912,13 +2957,19 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.set_segment = pvm_set_segment,
 	.get_cpl = pvm_get_cpl,
 	.get_cs_db_l_bits = pvm_get_cs_db_l_bits,
+	.is_valid_cr0 = pvm_is_valid_cr0,
+	.set_cr0 = pvm_set_cr0,
 	.load_mmu_pgd = pvm_load_mmu_pgd,
+	.is_valid_cr4 = pvm_is_valid_cr4,
+	.set_cr4 = pvm_set_cr4,
+	.set_efer = pvm_set_efer,
 	.get_gdt = pvm_get_gdt,
 	.set_gdt = pvm_set_gdt,
 	.get_idt = pvm_get_idt,
 	.set_idt = pvm_set_idt,
 	.set_dr7 = pvm_set_dr7,
 	.sync_dirty_debug_regs = pvm_sync_dirty_debug_regs,
+	.cache_reg = pvm_cache_reg,
 	.get_rflags = pvm_get_rflags,
 	.set_rflags = pvm_set_rflags,
 	.get_if_flag = pvm_get_if_flag,
