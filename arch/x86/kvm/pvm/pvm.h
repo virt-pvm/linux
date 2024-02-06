@@ -106,6 +106,7 @@ struct vcpu_pvm {
 
 	int loaded_cpu_state;
 	int int_shadow;
+	bool non_pvm_mode;
 	bool nmi_mask;
 
 	unsigned long guest_dr7;
