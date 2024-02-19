@@ -853,7 +853,8 @@ config KVM_GUEST
 
 config PVM_GUEST
 	bool "PVM Guest support"
-	depends on X86_64 && KVM_GUEST
+	depends on X86_64 && KVM_GUEST && X86_PIE
+	select RELOCATABLE_UNCOMPRESSED_KERNEL
 	default n
 	help
 	  This option enables the kernel to run as a PVM guest under the PVM

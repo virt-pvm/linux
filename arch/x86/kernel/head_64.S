@@ -91,6 +91,19 @@ SYM_CODE_START_NOALIGN(startup_64)
 	movq	%rdx, PER_CPU_VAR(this_cpu_off)
 #endif
 
+#ifdef CONFIG_PVM_GUEST
+	leaq	_text(%rip), %rdi
+	call	pvm_relocate_kernel
+#ifdef CONFIG_SMP
+	/* Fill __per_cpu_offset[0] again, because it got relocated. */
+	movabs	$__per_cpu_load, %rdx
+	movabs	$__per_cpu_start, %rax
+	subq	%rax, %rdx
+	movq	%rdx, __per_cpu_offset(%rip)
+	movq	%rdx, PER_CPU_VAR(this_cpu_off)
+#endif
+#endif
+
 	call	startup_64_setup_env
 
 	/* Now switch to __KERNEL_CS so IRET works reliably */

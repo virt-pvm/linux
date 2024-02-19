@@ -20,6 +20,7 @@
 #include <asm/trapnr.h>
 #include <asm/sev.h>
 #include <asm/init.h>
+#include <asm/pvm_para.h>
 
 extern pmd_t early_dynamic_pgts[EARLY_DYNAMIC_PAGE_TABLES][PTRS_PER_PMD];
 extern unsigned int next_early_pgt;
@@ -383,5 +384,31 @@ void __head __relocate_kernel(unsigned long physbase, unsigned long virtbase)
 			continue;
 		*(uint64_t *)ptr += delta;
 	}
+}
+#endif
+
+#ifdef CONFIG_PVM_GUEST
+extern unsigned long pvm_range_start;
+extern unsigned long pvm_range_end;
+
+static void __head detect_pvm_range(void)
+{
+	unsigned long msr_val;
+	unsigned long pml4_index_start, pml4_index_end;
+
+	msr_val = __rdmsr(MSR_PVM_LINEAR_ADDRESS_RANGE);
+	pml4_index_start = msr_val & 0x1ff;
+	pml4_index_end = (msr_val >> 16) & 0x1ff;
+	pvm_range_start = (0x1fffe00 | pml4_index_start) * P4D_SIZE;
+	pvm_range_end = (0x1fffe00 | pml4_index_end) * P4D_SIZE;
+}
+
+void __head pvm_relocate_kernel(unsigned long physbase)
+{
+	if (!pvm_detect())
+		return;
+
+	detect_pvm_range();
+	__relocate_kernel(physbase, pvm_range_end - (2UL << 30));
 }
 #endif
