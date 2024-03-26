@@ -1344,6 +1344,8 @@ static void pvm_set_segment(struct kvm_vcpu *vcpu, struct kvm_segment *var, int 
 			if (cpl == 0 && !pvm->non_pvm_mode)
 				pvm_standard_msr_star(pvm);
 		}
+		if (pvm->non_pvm_mode)
+			try_to_convert_to_pvm_mode(vcpu);
 		break;
 	case VCPU_SREG_LDTR:
 		// pvm doesn't support LDT
@@ -1623,6 +1625,19 @@ static int do_pvm_supervisor_interrupt(struct kvm_vcpu *vcpu, int vector,
 static int do_pvm_event(struct kvm_vcpu *vcpu, int vector,
 			bool has_error_code, u64 error_code)
 {
+	/*
+	 * Unlike in VMX, the injected event is delivered by the guest before
+	 * VM entry, so it is not allowed to inject event in non-PVM mode.
+	 * Although, we have attempted to switch to PVM mode before event
+	 * injection, the VMM may still inject event in non-PVM mode, so issue
+	 * a warning for VMM in such cases. Also, try to swith to PVM mode if
+	 * something is broken in the hypervisor.
+	 */
+	if (unlikely(to_pvm(vcpu)->non_pvm_mode)) {
+		pr_warn_ratelimited("Inject event in non-PVM mode");
+		try_to_convert_to_pvm_mode(vcpu);
+	}
+
 	if (!is_smod(to_pvm(vcpu)))
 		return do_pvm_user_event(vcpu, vector, has_error_code, error_code);
 
