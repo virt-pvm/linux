@@ -933,6 +933,11 @@ static bool pvm_check_and_set_msr_linear_address_range(struct vcpu_pvm *pvm, u64
 	u64 pml5_i_s = (msr >> 32) & 0x1ff;
 	u64 pml5_i_e = (msr >> 48) & 0x1ff;
 
+	if (!msr) {
+		pvm_set_default_msr_linear_address_range(pvm);
+		return true;
+	}
+
 	/* PVM specification requires those bits to be all set. */
 	if ((msr & 0xff00ff00ff00ff00) != 0xff00ff00ff00ff00)
 		return false;
