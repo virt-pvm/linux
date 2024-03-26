@@ -1149,12 +1149,21 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_PVM_VCPU_STRUCT:
 		if (!PAGE_ALIGNED(data))
 			return 1;
+		/*
+		 * During the VM restore process, if the VMM restores MSRs
+		 * before adding the user memory region, it can result in a
+		 * failure in kvm_gpc_activate() because no memslot has been
+		 * added yet. As a consequence, the VM will panic after the VM
+		 * restore since the GPC is not active. However, if we store
+		 * the value even if kvm_gpc_activate() fails later when the
+		 * GPC is active, it can be refreshed by the addition of the
+		 * user memory region before the VM entry.
+		 */
+		pvm->msr_vcpu_struct = data;
 		if (!data)
 			kvm_gpc_deactivate(&pvm->pvcs_gpc);
 		else if (kvm_gpc_activate(&pvm->pvcs_gpc, data, PAGE_SIZE))
 			return 1;
-
-		pvm->msr_vcpu_struct = data;
 		break;
 	case MSR_PVM_SUPERVISOR_RSP:
 		pvm->msr_supervisor_rsp = msr_info->data;
