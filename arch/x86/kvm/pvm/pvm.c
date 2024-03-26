@@ -231,6 +231,12 @@ static void pvm_update_guest_cpuid_faulting(struct kvm_vcpu *vcpu, u64 data)
 #define CONVERT_TO_PVM_CR0_ON	(X86_CR0_NE | X86_CR0_AM | X86_CR0_WP | \
 				 X86_CR0_PG | X86_CR0_PE)
 
+static inline void pvm_standard_msr_star(struct vcpu_pvm *pvm)
+{
+	pvm->msr_star = ((u64)pvm->segments[VCPU_SREG_CS].selector << 32) |
+			((u64)__USER32_CS << 48);
+}
+
 static bool try_to_convert_to_pvm_mode(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
@@ -255,10 +261,13 @@ static bool try_to_convert_to_pvm_mode(struct kvm_vcpu *vcpu)
 	if (cr0 != vcpu->arch.cr0)
 		kvm_set_cr0(vcpu, cr0);
 
-	/* Atomically set MSR_STAR on converting to PVM mode. */
-	if (!kernel_cs_by_msr(pvm->msr_star))
-		pvm->msr_star = ((u64)pvm->segments[VCPU_SREG_CS].selector << 32) |
-				((u64)__USER32_CS << 48);
+	/*
+	 * Atomically set MSR_STAR when switching to PVM mode if the guest is
+	 * in supervisor mode. In the case of user mode, the MSR_STAR should be
+	 * set using MSR setting during the VM migration.
+	 */
+	if (is_smod(pvm))
+		pvm_standard_msr_star(pvm);
 
 	pvm->non_pvm_mode = false;
 
@@ -1332,6 +1341,8 @@ static void pvm_set_segment(struct kvm_vcpu *vcpu, struct kvm_segment *var, int 
 				goto invalid_change;
 			if (cpl == 0 && !var->l)
 				pvm->non_pvm_mode = true;
+			if (cpl == 0 && !pvm->non_pvm_mode)
+				pvm_standard_msr_star(pvm);
 		}
 		break;
 	case VCPU_SREG_LDTR:
