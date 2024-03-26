@@ -154,7 +154,7 @@ static __always_inline bool pvm_guest_allowed_va(struct kvm_vcpu *vcpu, u64 va)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 
-	if ((s64)va > 0)
+	if ((s64)va >= 0)
 		return true;
 	if (pvm->l4_range_start <= va && va < pvm->l4_range_end)
 		return true;
