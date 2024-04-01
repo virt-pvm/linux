@@ -1169,6 +1169,10 @@ static inline int __do_cpuid_func(struct kvm_cpuid_array *array, u32 function)
 		if (sched_info_on())
 			entry->eax |= (1 << KVM_FEATURE_STEAL_TIME);
 
+		/* FIXME: Enable PV MMU for PVM for now. */
+		if (kvm_cpuid_vendor_signature == PVM_CPUID_SIGNATURE)
+			entry->eax |= (1 << KVM_FEATURE_PV_MMU);
+
 		entry->ebx = 0;
 		entry->ecx = 0;
 		entry->edx = 0;

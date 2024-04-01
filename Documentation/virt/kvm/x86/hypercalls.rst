@@ -190,3 +190,14 @@ the KVM_CAP_EXIT_HYPERCALL capability. Userspace must enable that capability
 before advertising KVM_FEATURE_HC_MAP_GPA_RANGE in the guest CPUID.  In
 addition, if the guest supports KVM_FEATURE_MIGRATION_CONTROL, userspace
 must also set up an MSR filter to process writes to MSR_KVM_MIGRATION_CONTROL.
+
+9. KVM_HC_PV_MMU_RELEASE_PT
+---------------------------
+:Architecture: x86
+:Status: active
+:Purpose: Request KVM to release PT.
+
+a0: the guest physical address of the page table
+
+The hypercall lets a guest to notify KVM to release the shadowed PT directly
+when the guest is ready to reclaim the memory of the page table.

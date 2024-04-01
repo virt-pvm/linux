@@ -10033,6 +10033,13 @@ int kvm_handle_hypercall(struct kvm_vcpu *vcpu, bool skip)
 		WARN_ON_ONCE(vcpu->run->hypercall.flags & KVM_EXIT_HYPERCALL_MBZ);
 		vcpu->arch.complete_userspace_io = complete_hypercall_exit;
 		return 0;
+	case KVM_HC_PV_MMU_RELEASE_PT:
+		if (!guest_pv_has(vcpu, KVM_FEATURE_PV_MMU))
+			break;
+
+		kvm_pv_mmu_release_pt(vcpu->kvm, a0);
+		ret = 0;
+		break;
 	}
 	default:
 		ret = -KVM_ENOSYS;

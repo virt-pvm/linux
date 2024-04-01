@@ -5742,6 +5742,11 @@ void kvm_mmu_track_write(struct kvm_vcpu *vcpu, gpa_t gpa, const u8 *new,
 	write_unlock(&vcpu->kvm->mmu_lock);
 }
 
+void kvm_pv_mmu_release_pt(struct kvm *kvm, gfn_t table_gfn)
+{
+	kvm_mmu_unprotect_page(kvm, table_gfn);
+}
+
 int noinline kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa, u64 error_code,
 		       void *insn, int insn_len)
 {
