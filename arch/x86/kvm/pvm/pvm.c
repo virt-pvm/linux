@@ -774,9 +774,11 @@ static void pvm_set_host_cr3_for_guest_without_host_pcid(struct vcpu_pvm *pvm)
 {
 	u64 root_hpa = pvm->vcpu.arch.mmu->root.hpa;
 	u64 switch_root = 0;
+	u64 prev_root_hpa = pvm->vcpu.arch.mmu->prev_roots[0].hpa;
 
-	if (pvm->vcpu.arch.mmu->prev_roots[0].pgd == pvm->msr_switch_cr3) {
-		switch_root = pvm->vcpu.arch.mmu->prev_roots[0].hpa;
+	if (VALID_PAGE(prev_root_hpa) &&
+	    pvm->vcpu.arch.mmu->prev_roots[0].pgd == pvm->msr_switch_cr3) {
+		switch_root = prev_root_hpa;
 		pvm->switch_flags &= ~SWITCH_FLAGS_NO_DS_CR3;
 	} else {
 		pvm->switch_flags |= SWITCH_FLAGS_NO_DS_CR3;
