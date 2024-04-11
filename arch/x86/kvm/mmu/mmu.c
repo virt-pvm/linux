@@ -2333,6 +2333,7 @@ static union kvm_mmu_page_role kvm_mmu_child_role(u64 *sptep, bool direct,
 	role.access = access;
 	role.direct = direct;
 	role.passthrough = 0;
+	role.host_mmu_la57_top_p4d = 0;
 
 	/*
 	 * If the guest has 4-byte PTEs then that means it's using 32-bit,
