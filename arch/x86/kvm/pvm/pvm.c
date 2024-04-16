@@ -953,9 +953,26 @@ static bool pvm_check_and_set_msr_linear_address_range(struct vcpu_pvm *pvm, u64
 	if ((msr & 0xff00ff00ff00ff00) != 0xff00ff00ff00ff00)
 		return false;
 
+	if (pml4_i_s > pml4_i_e || pml5_i_s > pml5_i_e)
+		return false;
+
+	/*
+	 * PVM specification requires the index to be set as '0x1ff' if the
+	 * size of range is 0.
+	 */
+	if ((pml4_i_s == pml4_i_e && pml4_i_s != 0x1ff) ||
+	    (pml5_i_s == pml5_i_e && pml5_i_s != 0x1ff))
+		return false;
+
 	/* Guest ranges should be inside what the hypervisor can provide. */
-	if (pml4_i_s < pml4_index_start || pml4_i_e > pml4_index_end ||
-	    pml5_i_s < pml5_index_start || pml5_i_e > pml5_index_end)
+	if (pml4_i_s < pml4_index_start || pml4_i_e > pml4_index_end)
+		return false;
+
+	/*
+	 * Allow for migration of guest in 4-level paging mode between hosts in
+	 * both 4-level paging mode and 5-level paging mode.
+	 */
+	if (pml5_i_s != 0x1ff && (pml5_i_s < pml5_index_start || pml5_i_e > pml5_index_end))
 		return false;
 
 	pvm_set_msr_linear_address_range(pvm, pml4_i_s, pml4_i_e, pml5_i_s, pml5_i_e);
@@ -2979,8 +2996,11 @@ static __init void pvm_set_cpu_caps(void)
 	/*
 	 * Unlike VMX/SVM which can switches paging mode atomically, PVM
 	 * implements guest LA57 through host LA57 shadow paging.
+	 *
+	 * If the allocation of the reserved range fails, disable support for
+	 * 5-level paging support.
 	 */
-	if (!pgtable_l5_enabled())
+	if (!pgtable_l5_enabled() || pml5_index_start == 0x1ff)
 		kvm_cpu_cap_clear(X86_FEATURE_LA57);
 
 	/*
