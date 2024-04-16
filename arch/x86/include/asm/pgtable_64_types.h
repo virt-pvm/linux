@@ -221,6 +221,13 @@ extern unsigned int ptrs_per_p4d;
 
 #define PGD_KERNEL_START	((PAGE_SIZE / 2) / sizeof(pgd_t))
 
+#define VADDR_END_L4		RAW_CPU_ENTRY_AREA_BASE
+/*
+ * The topest 128TB in the 5-level page tables is available for PVM 4-level
+ * paging mode guest.
+ */
+#define VADDR_END_L5		(-1UL << 47)
+
 /*
  * We borrow bit 3 to remember PG_anon_exclusive.
  */

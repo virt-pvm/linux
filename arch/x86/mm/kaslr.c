@@ -35,13 +35,6 @@
 #define TB_SHIFT 40
 
 /*
- * The end address could depend on more configuration options to make the
- * highest amount of space for randomization available, but that's too hard
- * to keep straight and caused issues already.
- */
-static const unsigned long vaddr_end = RAW_CPU_ENTRY_AREA_BASE;
-
-/*
  * Memory regions randomized by KASLR (except modules that use a separate logic
  * earlier during boot). The list is ordered based on virtual addresses. This
  * order is kept after randomization.
@@ -65,13 +58,19 @@ static inline unsigned long get_padding(struct kaslr_memory_region *region)
 void __init kernel_randomize_memory(void)
 {
 	size_t i;
-	unsigned long vaddr_start, vaddr;
+	unsigned long vaddr_start, vaddr_end, vaddr;
 	unsigned long rand, memory_tb;
 	struct rnd_state rand_state;
 	unsigned long remain_entropy;
 	unsigned long vmemmap_size;
 
 	vaddr_start = pgtable_l5_enabled() ? __PAGE_OFFSET_BASE_L5 : __PAGE_OFFSET_BASE_L4;
+	/*
+	 * The end address could depend on more configuration options to make the
+	 * highest amount of space for randomization available, but that's too hard
+	 * to keep straight and caused issues already.
+	 */
+	vaddr_end = pgtable_l5_enabled() ? VADDR_END_L5 : VADDR_END_L4;
 	vaddr = vaddr_start;
 
 	/*
@@ -79,8 +78,7 @@ void __init kernel_randomize_memory(void)
 	 * with the vaddr_start/vaddr_end variables. These checks are very
 	 * limited....
 	 */
-	BUILD_BUG_ON(vaddr_start >= vaddr_end);
-	BUILD_BUG_ON(vaddr_end != RAW_CPU_ENTRY_AREA_BASE);
+	BUILD_BUG_ON(VADDR_END_L5 > RAW_CPU_ENTRY_AREA_BASE);
 	BUILD_BUG_ON(vaddr_end > __START_KERNEL_map);
 
 	if (pvm_kernel_layout_relocate())
