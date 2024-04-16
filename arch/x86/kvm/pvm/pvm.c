@@ -1912,7 +1912,7 @@ static int handle_hc_load_pagetables(struct kvm_vcpu *vcpu, unsigned long flags,
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 	unsigned long cr4 = vcpu->arch.cr4;
 
-	if (!(flags & 2))
+	if (!(flags & PVM_LOAD_PGTBL_FLAGS_LA57))
 		cr4 &= ~X86_CR4_LA57;
 	else if (guest_cpuid_has(vcpu, X86_FEATURE_LA57))
 		cr4 |= X86_CR4_LA57;
@@ -1926,7 +1926,7 @@ static int handle_hc_load_pagetables(struct kvm_vcpu *vcpu, unsigned long flags,
 	vcpu->arch.cr3 = pgd;
 	pvm->msr_switch_cr3 = user_pgd;
 
-	if (flags & 1)
+	if (flags & PVM_LOAD_PGTBL_FLAGS_TLB)
 		pvm_flush_tlb_guest_current_kernel_user(vcpu);
 
 	return 1;

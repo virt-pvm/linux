@@ -181,6 +181,8 @@ static void pvm_write_cr3(unsigned long val)
 	unsigned long flags = ~val >> 63;
 	unsigned long pgd = val & ~X86_CR3_PCID_NOFLUSH;
 
+	if (pgtable_l5_enabled())
+		flags |= PVM_LOAD_PGTBL_FLAGS_LA57;
 	this_cpu_write(pvm_guest_cr3, pgd);
 	pvm_hypercall3(PVM_HC_LOAD_PGTBL, flags, pgd, pvm_user_pgd(pgd));
 }

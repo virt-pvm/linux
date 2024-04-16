@@ -59,12 +59,12 @@
 #define PVM_HC_LOAD_TLS			(PVM_HC_SPECIAL_BASE+9)
 
 /*
- * PVM_EVENT_FLAGS_IP
+ * PVM_EVENT_FLAGS_IF
  *	- Interrupt enable flag. The flag is set to respond to maskable
  *	  external interrupts; and cleared to inhibit maskable external
  *	  interrupts.
  *
- * PVM_EVENT_FLAGS_IF
+ * PVM_EVENT_FLAGS_IP
  *	- interrupt pending flag. The hypervisor sets it if it fails to inject
  *	  a maskable event to the VCPU due to the interrupt-enable flag being
  *	  cleared in supervisor mode.
@@ -73,6 +73,9 @@
 #define PVM_EVENT_FLAGS_IP		_BITUL(PVM_EVENT_FLAGS_IP_BIT)
 #define PVM_EVENT_FLAGS_IF_BIT		9
 #define PVM_EVENT_FLAGS_IF		_BITUL(PVM_EVENT_FLAGS_IF_BIT)
+
+#define PVM_LOAD_PGTBL_FLAGS_TLB	_BITUL(0)
+#define PVM_LOAD_PGTBL_FLAGS_LA57	_BITUL(1)
 
 #ifndef __ASSEMBLY__
 
