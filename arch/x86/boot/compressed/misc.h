@@ -124,6 +124,8 @@ static inline unsigned long pie_randomize(void)
 }
 #endif
 
+extern bool pvm_detected;
+
 /* cpuflags.c */
 bool has_cpuflag(int flag);
 
