@@ -854,6 +854,22 @@ void choose_random_location(unsigned long input,
 
 	boot_params_ptr->hdr.loadflags |= KASLR_FLAG;
 
+	/*
+	 * For PVM guest, both physical address randomization and virtual
+	 * address randomization should be disabled. This is because if
+	 * physical address randomization chooses an output address above 4GB,
+	 * it will trigger a #PF during decompression. In order to handle this,
+	 * PVM event handling initialization for the #PF handler needs to be
+	 * done. For simplicity, physical address randomization should be
+	 * skipped. As for virtual address randomization, PVM guest needs to
+	 * detect the allowed range first, and thus it should also be skipped
+	 * and can be done after kernel entry.
+	 */
+	if (IS_ENABLED(CONFIG_PVM_GUEST) && pvm_detected) {
+		warn("Skip relocation for PVM guest.");
+		return;
+	}
+
 	if (IS_ENABLED(CONFIG_X86_32))
 		mem_limit = KERNEL_IMAGE_SIZE;
 	else
@@ -916,6 +932,9 @@ unsigned long pie_randomize(void)
 	int i;
 
 	if (cmdline_find_option_bool("nokaslr"))
+		return 0;
+
+	if (IS_ENABLED(CONFIG_PVM_GUEST) && pvm_detected)
 		return 0;
 
 	total = 0;
