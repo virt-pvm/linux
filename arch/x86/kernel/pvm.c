@@ -520,11 +520,20 @@ void pvm_setup_event_handling(void)
 }
 
 #define TB_SHIFT	40
-#define HOLE_SIZE	(1UL << 39)
+#define PB_SHIFT	50
 
-#define PVM_DIRECT_MAPPING_SIZE		(8UL << TB_SHIFT)
-#define PVM_VMALLOC_SIZE		(5UL << TB_SHIFT)
-#define PVM_VMEM_MAPPING_SIZE		(1UL << TB_SHIFT)
+#define HOLE_L4_SIZE	(1UL << 39)
+#define HOLE_L5_SIZE	(1UL << 48)
+
+#define PVM_DIRECT_MAPPING_L4_SIZE	(8UL << TB_SHIFT)
+#define PVM_DIRECT_MAPPING_L5_SIZE	(4UL << PB_SHIFT)
+#define PVM_VMALLOC_L4_SIZE		(5UL << TB_SHIFT)
+#define PVM_VMALLOC_L5_SIZE		(3UL << PB_SHIFT)
+#define PVM_VMEM_MAPPING_L4_SIZE	HOLE_L4_SIZE
+#define PVM_VMEM_MAPPING_L5_SIZE	HOLE_L5_SIZE
+
+#define PVM_CPU_ENTRY_AREA_MAP_SIZE	(1UL << 39)
+#define PVM_IDENTICAL_AREA_SIZE		(1UL << 40)
 
 /*
  * For a PVM guest, the hypervisor would provide one valid virtual address
@@ -534,47 +543,83 @@ void pvm_setup_event_handling(void)
  * PVM guest kernel with 4-level page tables could arrange its layout as
  * follows:
  *
- * ffff800000000000 - ffff87ffffffffff (=43 bits) guard hole, reserved for hypervisor
+ * ffff800000000000 - ffff87ffffffffff (=8 TB) guard hole, reserved for hypervisor
  * ... host kernel used ...  guest kernel range start
  * ffffd90000000000 - ffffe0ffffffffff (=8 TB) directing mapping of all physical memory
- * ffffe10000000000 - ffffe17fffffffff (=39 bit) hole
+ * ffffe10000000000 - ffffe17fffffffff (=0.5 TB) hole
  * ffffe18000000000 - ffffe67fffffffff (=5 TB) vmalloc/ioremap space
- * ffffe68000000000 - ffffe6ffffffffff (=39 bit) hole
- * ffffe70000000000 - ffffe7ffffffffff (=40 bit) virtual memory map (1TB)
- * ffffe80000000000 - ffffe87fffffffff (=39 bit) cpu_entry_area mapping
- * ffffe88000000000 - ffffe8ff7fffffff (=510 G) hole
- * ffffe8ff80000000 - ffffe8ffffffffff (=2 G) kernel image
+ * ffffe68000000000 - ffffe6ffffffffff (=0.5 TB) hole
+ * ffffe70000000000 - ffffe77fffffffff (=0.5 TB) virtual memory map
+ * ffffe78000000000 - ffffe7ffffffffff (=0.5 TB) hole
+ * ffffe80000000000 - ffffe87fffffffff (=0.5 TB) cpu_entry_area mapping
+ * ffffe88000000000 - ffffe8ff7fffffff (=510 GB) hole
+ * ffffe8ff80000000 - ffffe8ffffffffff (=2 GB) kernel image
+ * ... host kernel used ... guest kernel range end
+ *
+ * If the range start is 0xff50000000000000, the PVM guest kernel with 5-level
+ * page tables could arrange its layout as follows:
+ *
+ * ff00000000000000 - ff0fffffffffffff (=4 PB) guard hole, reserved for hypervisor
+ * ... host kernel used ...  guest kernel range start
+ * ff50000000000000 - ff5fffffffffffff (=4 PB) directing mapping of all physical memory
+ * ff60000000000000 - ff60ffffffffffff (=0.25 PB) hole
+ * ff61000000000000 - ff6cffffffffffff (=3 PB) vmalloc/ioremap space
+ * ff6d000000000000 - ff6dffffffffffff (=0.25 PB) hole
+ * ff6e000000000000 - ff6effffffffffff (=0.25 PB) virtual memory map
+ * ff6f000000000000 - ff6ffeffffffffff (=255 TB) hole
+ *
+ * ... Identical layout to the 4-level page tables from here on ...
+ * ff6fff0000000000 - ff6fff7fffffffff (=0.5 TB) cpu_entry_area mapping
+ * ff6fff8000000000 - ff6fffff7fffffff (=510 GB) hole
+ * ff6fffff80000000 - ff6fffffffffffff (=2 GB) kernel image
  * ... host kernel used ... guest kernel range end
  *
  */
 bool __init pvm_kernel_layout_relocate(void)
 {
 	unsigned long area_size;
+	unsigned long direct_mapping_size, vmalloc_size;
+	unsigned long vmem_mapping_size, hole_size;
 
 	if (!boot_cpu_has(X86_FEATURE_KVM_PVM_GUEST)) {
-		vmemory_end = VMALLOC_START + (VMALLOC_SIZE_TB << 40) - 1;
+		vmemory_end = VMALLOC_START + (VMALLOC_SIZE_TB << TB_SHIFT) - 1;
 		return false;
 	}
 
 	if (!IS_ALIGNED(pvm_range_start, PGDIR_SIZE))
 		panic("The start of the allowed range is not aligned");
 
+	if (pgtable_l5_enabled()) {
+		direct_mapping_size = PVM_DIRECT_MAPPING_L5_SIZE;
+		vmalloc_size = PVM_VMALLOC_L5_SIZE;
+		vmem_mapping_size = PVM_VMEM_MAPPING_L5_SIZE;
+		hole_size = HOLE_L5_SIZE;
+	} else {
+		direct_mapping_size = PVM_DIRECT_MAPPING_L4_SIZE;
+		vmalloc_size = PVM_VMALLOC_L4_SIZE;
+		vmem_mapping_size = PVM_VMEM_MAPPING_L4_SIZE;
+		hole_size = HOLE_L4_SIZE;
+	}
+
 	area_size = max_pfn << PAGE_SHIFT;
-	if (area_size > PVM_DIRECT_MAPPING_SIZE)
+	if (area_size > direct_mapping_size)
 		panic("The memory size is too large for directing mapping area");
 
-	vmalloc_base = page_offset_base + PVM_DIRECT_MAPPING_SIZE + HOLE_SIZE;
-	vmemory_end = vmalloc_base + PVM_VMALLOC_SIZE;
+	vmalloc_base = page_offset_base + direct_mapping_size + hole_size;
+	vmemory_end = vmalloc_base + vmalloc_size;
 
-	vmemmap_base = vmemory_end + HOLE_SIZE;
+	vmemmap_base = vmemory_end + hole_size;
 	area_size = max_pfn * sizeof(struct page);
-	if (area_size > PVM_VMEM_MAPPING_SIZE)
+	if (area_size > vmem_mapping_size)
 		panic("The memory size is too large for virtual memory mapping area");
 
-	cpu_entry_area_base = vmemmap_base + PVM_VMEM_MAPPING_SIZE;
-	BUILD_BUG_ON(CPU_ENTRY_AREA_MAP_SIZE > (1UL << 39));
-
-	if (cpu_entry_area_base + (2UL << 39) > pvm_range_end)
+	/*
+	 * This ensures that the CPU entry area is in the same PGD as the
+	 * kernel image area.
+	 */
+	cpu_entry_area_base = pvm_range_end - PVM_IDENTICAL_AREA_SIZE;
+	BUILD_BUG_ON(CPU_ENTRY_AREA_MAP_SIZE > PVM_CPU_ENTRY_AREA_MAP_SIZE);
+	if (cpu_entry_area_base < vmemmap_base + vmem_mapping_size)
 		panic("The size of the allowed range is too small");
 
 	return true;
