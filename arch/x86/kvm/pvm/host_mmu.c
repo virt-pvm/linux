@@ -101,9 +101,9 @@ int __init host_mmu_init(void)
 		return -ENOMEM;
 
 	if (!boot_cpu_has(X86_FEATURE_PTI))
-		host_pgd = (void *)current->mm->pgd;
+		host_pgd = (void *)current->active_mm->pgd;
 	else
-		host_pgd = (void *)kernel_to_user_pgdp(current->mm->pgd);
+		host_pgd = (void *)kernel_to_user_pgdp(current->active_mm->pgd);
 
 	host_mmu_root_pgd = (void *)__get_free_page(GFP_KERNEL | __GFP_ZERO);
 
