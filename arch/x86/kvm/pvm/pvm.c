@@ -1188,15 +1188,17 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		 * failure in kvm_gpc_activate() because no memslot has been
 		 * added yet. As a consequence, the VM will panic after the VM
 		 * restore since the GPC is not active. However, if we store
-		 * the value even if kvm_gpc_activate() fails later when the
-		 * GPC is active, it can be refreshed by the addition of the
-		 * user memory region before the VM entry.
+		 * the value and make a 'KVM_REQ_GPC_REFRESH' request when
+		 * kvm_gpc_activate() fails later, the GPC can be refreshed by
+		 * the request serving before the VM entry. If the guest writes
+		 * an invalid value, the request will trigger a triple fault in
+		 * request serving.
 		 */
 		pvm->msr_vcpu_struct = data;
 		if (!data)
 			kvm_gpc_deactivate(&pvm->pvcs_gpc);
 		else if (kvm_gpc_activate(&pvm->pvcs_gpc, data, PAGE_SIZE))
-			return 1;
+			kvm_make_request(KVM_REQ_GPC_REFRESH, vcpu);
 		break;
 	case MSR_PVM_SUPERVISOR_RSP:
 		pvm->msr_supervisor_rsp = msr_info->data;
@@ -2731,6 +2733,16 @@ static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu)
 	 */
 	if (pvm->non_pvm_mode)
 		return EXIT_FASTPATH_NONE;
+
+	/*
+	 * Per to PVM specification, if the GPC of PVCS is invalid, meaning
+	 * 'pvcs_gpc.khva' is NULL, then 'pvm->msr_vcpu_struct' must also be
+	 * NULL.
+	 */
+	if (WARN_ON_ONCE(!pvm->pvcs_gpc.khva && pvm->msr_vcpu_struct)) {
+		kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+		return EXIT_FASTPATH_NONE;
+	}
 
 	trace_kvm_entry(vcpu);
 
