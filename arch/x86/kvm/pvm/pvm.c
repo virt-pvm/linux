@@ -1195,10 +1195,20 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		 * request serving.
 		 */
 		pvm->msr_vcpu_struct = data;
-		if (!data)
+		if (!data) {
+			pvm->switch_flags |= SWITCH_FLAGS_PVCS_INVALID;
 			kvm_gpc_deactivate(&pvm->pvcs_gpc);
-		else if (kvm_gpc_activate(&pvm->pvcs_gpc, data, PAGE_SIZE))
-			kvm_make_request(KVM_REQ_GPC_REFRESH, vcpu);
+		} else {
+			/*
+			 * Clear the 'SWITCH_FLAGS_PVCS_INVALID' bit even if the
+			 * GPC activation fails, since a 'KVM_REQ_GPC_REFRESH'
+			 * request is being set. Therefore, it must be valid
+			 * before VM entry or a triple fault will be triggered.
+			 */
+			pvm->switch_flags &= ~SWITCH_FLAGS_PVCS_INVALID;
+			if (kvm_gpc_activate(&pvm->pvcs_gpc, data, PAGE_SIZE))
+				kvm_make_request(KVM_REQ_GPC_REFRESH, vcpu);
+		}
 		break;
 	case MSR_PVM_SUPERVISOR_RSP:
 		pvm->msr_supervisor_rsp = msr_info->data;
