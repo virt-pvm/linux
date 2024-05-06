@@ -1431,8 +1431,13 @@ struct kvm_arch {
 	 * the thread holds the MMU lock in write mode.
 	 */
 	spinlock_t tdp_mmu_pages_lock;
-	u64 *host_mmu_root_pgd;
 #endif /* CONFIG_X86_64 */
+
+	/*
+	 * The root page table contains the host mapping PGDs, which will be
+	 * cloned into the guest's root SP during the root SP allocation.
+	 */
+	u64 *host_mmu_root_pgd;
 
 	/*
 	 * If set, at least one shadow root has been allocated. This flag
