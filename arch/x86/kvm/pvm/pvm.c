@@ -3012,6 +3012,9 @@ static __init void pvm_set_cpu_caps(void)
 
 	kvm_caps.supported_xss = 0;
 
+	/* Don't expose MSR_IA32_TSX_CTRL to guest for simplicity. */
+	host_arch_capabilities &= ~ARCH_CAP_TSX_CTRL_MSR;
+
 	if (kvm_mpx_supported())
 		kvm_cpu_cap_check_and_set(X86_FEATURE_MPX);
 
