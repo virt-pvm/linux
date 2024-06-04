@@ -15,6 +15,7 @@ typedef void (*idtentry_t)(struct pt_regs *regs);
 void __init pvm_early_setup(void);
 void __init pvm_setup_early_traps(void);
 void __init pvm_install_sysvec(unsigned int sysvec, idtentry_t handler);
+void __init pvm_switch_pvcs(int cpu);
 void pvm_setup_event_handling(void);
 bool __init pvm_kernel_layout_relocate(void);
 
@@ -77,6 +78,10 @@ static inline void pvm_setup_early_traps(void)
 }
 
 static inline void pvm_install_sysvec(unsigned int sysvec, idtentry_t handler)
+{
+}
+
+static inline void pvm_switch_pvcs(int cpu)
 {
 }
 

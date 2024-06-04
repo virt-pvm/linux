@@ -495,6 +495,20 @@ void __init pvm_early_setup(void)
 	pvm_early_patch();
 }
 
+void __init pvm_switch_pvcs(int cpu)
+{
+	/*
+	 * During the boot process, the boot CPU will switch GSBASE from the
+	 * .init.data area to the runtime per-CPU area, so we need to switch
+	 * the physical address of PVCS after that.
+	 */
+	if (boot_cpu_has(X86_FEATURE_KVM_PVM_GUEST) && !cpu) {
+		u64 xpa = slow_virt_to_phys(this_cpu_ptr(&pvm_vcpu_struct));
+
+		wrmsrl(MSR_PVM_VCPU_STRUCT, xpa);
+	}
+}
+
 void pvm_setup_event_handling(void)
 {
 	if (boot_cpu_has(X86_FEATURE_KVM_PVM_GUEST)) {

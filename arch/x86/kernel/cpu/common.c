@@ -753,6 +753,7 @@ void __init switch_gdt_and_percpu_base(int cpu)
 	 * per CPU stack canary is 0 in both per CPU areas.
 	 */
 	wrmsrl(MSR_GS_BASE, cpu_kernelmode_gs_base(cpu));
+	pvm_switch_pvcs(cpu);
 #else
 	/*
 	 * %fs is already set to __KERNEL_PERCPU, but after switching GDT
