@@ -23,6 +23,7 @@ struct event_key {
 	#define INVALID_KEY     (~0ULL)
 	u64 key;
 	int info;
+	u64 info2;
 	struct exit_reasons_table *exit_reasons;
 };
 
