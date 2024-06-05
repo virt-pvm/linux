@@ -2481,6 +2481,8 @@ static void pvm_get_exit_info(struct kvm_vcpu *vcpu, u32 *reason, u64 *info1, u6
 	else if (pvm->exit_vector >= FIRST_EXTERNAL_VECTOR &&
 		 pvm->exit_vector < NR_VECTORS)
 		*reason = PVM_EXIT_REASONS_INTERRUPT;
+	else if (pvm->exit_vector == SWITCH_EXIT_REASONS_FAILED_VMETNRY)
+		*reason = PVM_FAILED_VMENTRY_VECTOR;
 	else
 		*reason = pvm->exit_vector;
 	*info1 = pvm->exit_vector;
