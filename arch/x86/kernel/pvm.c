@@ -445,12 +445,6 @@ static void __init pvm_early_patch(void)
 
 extern void pvm_early_kernel_event_entry(void);
 
-/*
- * Reserve a fixed-size area in the current stack during an event from
- * supervisor mode. This is for the int3 handler to emulate a call instruction.
- */
-#define PVM_SUPERVISOR_REDZONE_SIZE	(2*8UL)
-
 void __init pvm_early_setup(void)
 {
 	if (!pvm_range_end)
@@ -487,9 +481,9 @@ void __init pvm_early_setup(void)
 	pv_ops.mmu.flush_tlb_kernel = pvm_flush_tlb_kernel;
 	pv_ops.mmu.flush_tlb_one_user = pvm_flush_tlb_one_user;
 
+	this_cpu_write(pvm_vcpu_struct.event_flags, PVM_EVENT_FLAGS_EF);
 	wrmsrl(MSR_PVM_VCPU_STRUCT, __pa(this_cpu_ptr(&pvm_vcpu_struct)));
-	wrmsrl(MSR_PVM_EVENT_ENTRY, (unsigned long)(void *)pvm_early_kernel_event_entry - 256);
-	wrmsrl(MSR_PVM_SUPERVISOR_REDZONE, PVM_SUPERVISOR_REDZONE_SIZE);
+	wrmsrl(MSR_PVM_EVENT_ENTRY, (unsigned long)(void *)pvm_early_kernel_event_entry - 512);
 	wrmsrl(MSR_PVM_RETS_RIP, (unsigned long)(void *)pvm_rets_rip);
 
 	pvm_early_patch();
@@ -514,9 +508,9 @@ void pvm_setup_event_handling(void)
 	if (boot_cpu_has(X86_FEATURE_KVM_PVM_GUEST)) {
 		u64 xpa = slow_virt_to_phys(this_cpu_ptr(&pvm_vcpu_struct));
 
+		this_cpu_write(pvm_vcpu_struct.event_flags, PVM_EVENT_FLAGS_EF);
 		wrmsrl(MSR_PVM_VCPU_STRUCT, xpa);
 		wrmsrl(MSR_PVM_EVENT_ENTRY, (unsigned long)(void *)pvm_user_event_entry);
-		wrmsrl(MSR_PVM_SUPERVISOR_REDZONE, PVM_SUPERVISOR_REDZONE_SIZE);
 		wrmsrl(MSR_PVM_RETU_RIP, (unsigned long)(void *)pvm_retu_rip);
 		wrmsrl(MSR_PVM_RETS_RIP, (unsigned long)(void *)pvm_rets_rip);
 

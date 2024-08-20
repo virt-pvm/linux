@@ -634,6 +634,8 @@ SYM_CODE_END(vc_no_ghcb)
 #endif
 
 #ifdef CONFIG_PVM_GUEST
+#include <asm/pvm_para.h>
+
 	.align 256
 SYM_CODE_START_NOALIGN(pvm_early_kernel_event_entry)
 	UNWIND_HINT_ENTRY
@@ -641,9 +643,17 @@ SYM_CODE_START_NOALIGN(pvm_early_kernel_event_entry)
 
 	incl	early_recursion_flag(%rip)
 
-	/* set %rcx, %r11 per PVM event handling specification */
-	movq	6*8(%rsp), %rcx
-	movq	7*8(%rsp), %r11
+	pushq	$__KERNEL_DS
+	pushq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_rsp) /* pt_regs->sp */
+	movl	PER_CPU_VAR(pvm_vcpu_struct + PVCS_eflags), %ecx
+	pushq	%rcx					/* pt_regs->flags */
+	pushq	$__KERNEL_CS
+	pushq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_rip) /* pt_regs->ip */
+	movq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_rcx), %rcx
+	movq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_r11), %r11
+	pushq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_errcode)
+
+	orq	$PVM_EVENT_FLAGS_EF, PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_flags)
 
 	PUSH_AND_CLEAR_REGS
 	movq	%rsp, %rdi	/* %rdi -> pt_regs */

@@ -8,29 +8,25 @@
 #include "calling.h"
 
 /* Construct struct pt_regs on stack */
-.macro PUSH_IRET_FRAME_FROM_PVCS has_cs_ss:req is_kernel:req
-	.if \has_cs_ss == 1
+.macro PUSH_IRET_FRAME_FROM_PVCS user:req
+	.if \user == 1
 		movl	PER_CPU_VAR(pvm_vcpu_struct + PVCS_user_ss), %ecx
-		andl	$0xff, %ecx
+		andq	$0xff, %rcx
 		pushq	%rcx				/* pt_regs->ss */
-	.elseif \is_kernel == 1
-		pushq	$__KERNEL_DS
 	.else
-		pushq	$__USER_DS
+		pushq	$__KERNEL_DS
 	.endif
 
 	pushq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_rsp) /* pt_regs->sp */
 	movl	PER_CPU_VAR(pvm_vcpu_struct + PVCS_eflags), %ecx
 	pushq	%rcx					/* pt_regs->flags */
 
-	.if \has_cs_ss == 1
+	.if \user == 1
 		movl	PER_CPU_VAR(pvm_vcpu_struct + PVCS_user_cs), %ecx
-		andl	$0xff, %ecx
+		andq	$0xff, %rcx
 		pushq	%rcx				/* pt_regs->cs */
-	.elseif \is_kernel == 1
-		pushq	$__KERNEL_CS
 	.else
-		pushq	$__USER_CS
+		pushq	$__KERNEL_CS
 	.endif
 
 	pushq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_rip) /* pt_regs->ip */
@@ -40,6 +36,21 @@
 	movq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_r11), %r11
 .endm
 
+.macro pvm_enable_events
+	orq	$PVM_EVENT_FLAGS_EF, PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_flags)
+	btq	$PVM_EVENT_FLAGS_EP_BIT, PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_flags)
+	jnc	.L_no_event_pending_\@
+	pushq	%rax
+	movq	$PVM_HC_EVENT_WIN, %rax
+	call	pvm_hypercall
+	popq	%rax
+.L_no_event_pending_\@:
+.endm
+
+.macro pvm_disable_events
+	btrq	$PVM_EVENT_FLAGS_EF_BIT, PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_flags)
+.endm
+
 .code64
 .section .entry.text, "ax"
 
@@ -47,7 +58,9 @@ SYM_CODE_START(entry_SYSCALL_64_pvm)
 	UNWIND_HINT_ENTRY
 	ENDBR
 
-	PUSH_IRET_FRAME_FROM_PVCS has_cs_ss=0 is_kernel=0
+	PUSH_IRET_FRAME_FROM_PVCS user=1
+
+	pvm_enable_events
 
 	jmp	entry_SYSCALL_64_after_hwframe
 SYM_CODE_END(entry_SYSCALL_64_pvm)
@@ -84,7 +97,7 @@ SYM_FUNC_START(pvm_irq_enable)
 	RET
 .L_maybe_interrupt_pending:
 	/* handle pending IRQ */
-	movq	$PVM_HC_IRQ_WIN, %rax
+	movq	$PVM_HC_EVENT_WIN, %rax
 	jmp	pvm_hypercall
 SYM_FUNC_END(pvm_irq_enable)
 .popsection
@@ -98,9 +111,11 @@ SYM_CODE_START(pvm_user_event_entry)
 	UNWIND_HINT_ENTRY
 	ENDBR
 
-	PUSH_IRET_FRAME_FROM_PVCS has_cs_ss=1 is_kernel=0
+	PUSH_IRET_FRAME_FROM_PVCS user=1
 	/* pt_regs->orig_ax: errcode and vector */
 	pushq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_errcode)
+
+	pvm_enable_events
 
 	PUSH_AND_CLEAR_REGS
 	movq	%rsp, %rdi	/* %rdi -> pt_regs */
@@ -108,6 +123,8 @@ SYM_CODE_START(pvm_user_event_entry)
 
 SYM_INNER_LABEL(pvm_restore_regs_and_return_to_usermode, SYM_L_GLOBAL)
 	POP_REGS
+
+	pvm_disable_events
 
 	/* Copy %rcx, %r11 to the PVM CPU structure. */
 	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rcx)
@@ -124,6 +141,7 @@ SYM_INNER_LABEL(pvm_restore_regs_and_return_to_usermode, SYM_L_GLOBAL)
 	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rsp)
 	movq	5*8(%rsp), %rcx		/* SS */
 	movw	%cx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_user_ss)
+
 	/*
 	 * We are on the trampoline stack.  All regs are live.
 	 * We can do future final exit work right here.
@@ -138,41 +156,26 @@ SYM_CODE_END(pvm_user_event_entry)
 
 /*
  * The new RIP value that PVM event delivery establishes is
- * MSR_PVM_EVENT_ENTRY + 256 for events with vector < 32
- * that occur in supervisor mode.
- */
-	.org pvm_user_event_entry+256, 0xcc
-SYM_CODE_START(pvm_kernel_exception_entry)
-	UNWIND_HINT_ENTRY
-	ENDBR
-
-	/* set %rcx, %r11 per PVM event handling specification */
-	movq	6*8(%rsp), %rcx
-	movq	7*8(%rsp), %r11
-
-	PUSH_AND_CLEAR_REGS
-	movq	%rsp, %rdi	/* %rdi -> pt_regs */
-	call	pvm_event
-
-	jmp pvm_restore_regs_and_return_to_kernel
-SYM_CODE_END(pvm_kernel_exception_entry)
-
-/*
- * The new RIP value that PVM event delivery establishes is
- * MSR_PVM_EVENT_ENTRY + 512 for events with vector >= 32
- * that occur in supervisor mode.
+ * MSR_PVM_EVENT_ENTRY + 512 for supervisor mode events.
  */
 	.org pvm_user_event_entry+512, 0xcc
-SYM_CODE_START(pvm_kernel_interrupt_entry)
+SYM_CODE_START(pvm_kernel_event_entry)
 	UNWIND_HINT_ENTRY
 	ENDBR
 
-	/* Reserve space for rcx/r11 */
+	/*
+	 * Reserve a fixed-size area in the current stack during an event from
+	 * supervisor mode. This is for the int3 handler to emulate a call instruction.
+	 */
 	subq	$16, %rsp
 
-	PUSH_IRET_FRAME_FROM_PVCS has_cs_ss=0 is_kernel=1
+	/* TODO: check stack overflow */
+
+	PUSH_IRET_FRAME_FROM_PVCS user=0
 	/* pt_regs->orig_ax: errcode and vector */
 	pushq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_errcode)
+
+	pvm_enable_events
 
 	PUSH_AND_CLEAR_REGS
 	movq	%rsp, %rdi	/* %rdi -> pt_regs */
@@ -181,9 +184,22 @@ SYM_CODE_START(pvm_kernel_interrupt_entry)
 SYM_INNER_LABEL(pvm_restore_regs_and_return_to_kernel, SYM_L_GLOBAL)
 	POP_REGS
 
-	movq	%rcx, 6*8(%rsp)
-	movq	%r11, 7*8(%rsp)
+	pvm_disable_events
+
+	/* Copy %rcx, %r11 to the PVM CPU structure. */
+	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rcx)
+	movq	%r11, PER_CPU_VAR(pvm_vcpu_struct + PVCS_r11)
+
+	/* Copy the IRET frame to the PVM CPU structure. */
+	movq	1*8(%rsp), %rcx		/* RIP */
+	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rip)
+	movq	3*8(%rsp), %rcx		/* RFLAGS */
+	movl	%ecx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_eflags)
+	movq	4*8(%rsp), %rcx		/* RSP */
+	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rsp)
+
+	addq	$6*8, %rsp
 SYM_INNER_LABEL(pvm_rets_rip, SYM_L_GLOBAL)
 	ANNOTATE_NOENDBR
 	syscall
-SYM_CODE_END(pvm_kernel_interrupt_entry)
+SYM_CODE_END(pvm_kernel_event_entry)

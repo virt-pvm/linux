@@ -142,6 +142,7 @@ SYM_INNER_LABEL(entry_SYSCALL_64_switcher_safe_stack, SYM_L_GLOBAL)
 
 	/* Now it must be umod, start to do direct switch from umod to smod */
 	movq	TSS_extra(pvcs), %rdi
+	movl	$((__USER_DS << 16) | __USER_CS), PVCS_user_cs(%rdi)
 	movl	%r11d, PVCS_eflags(%rdi)
 	movq	%rcx, PVCS_rip(%rdi)
 	movq	%rcx, PVCS_rcx(%rdi)

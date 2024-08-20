@@ -36,19 +36,18 @@
 
 #define MSR_PVM_LINEAR_ADDRESS_RANGE	0x4b564df0
 #define MSR_PVM_VCPU_STRUCT		0x4b564df1
-#define MSR_PVM_SUPERVISOR_RSP		0x4b564df2
-#define MSR_PVM_SUPERVISOR_REDZONE	0x4b564df3
+#define MSR_PVM_SWITCH_CR3		0x4b564df2
+#define MSR_PVM_SUPERVISOR_RSP		0x4b564df3
 #define MSR_PVM_EVENT_ENTRY		0x4b564df4
 #define MSR_PVM_RETU_RIP		0x4b564df5
 #define MSR_PVM_RETS_RIP		0x4b564df6
-#define MSR_PVM_SWITCH_CR3		0x4b564df7
 
 #define PVM_HC_SPECIAL_MAX_NR		(256)
 #define PVM_HC_SPECIAL_BASE		(0x17088200)
 #define PVM_HC_SPECIAL_MAX		(PVM_HC_SPECIAL_BASE+PVM_HC_SPECIAL_MAX_NR)
 
 #define PVM_HC_LOAD_PGTBL		(PVM_HC_SPECIAL_BASE+0)
-#define PVM_HC_IRQ_WIN			(PVM_HC_SPECIAL_BASE+1)
+#define PVM_HC_EVENT_WIN		(PVM_HC_SPECIAL_BASE+1)
 #define PVM_HC_IRQ_HALT			(PVM_HC_SPECIAL_BASE+2)
 #define PVM_HC_TLB_FLUSH		(PVM_HC_SPECIAL_BASE+3)
 #define PVM_HC_TLB_FLUSH_CURRENT	(PVM_HC_SPECIAL_BASE+4)
@@ -59,6 +58,17 @@
 #define PVM_HC_LOAD_TLS			(PVM_HC_SPECIAL_BASE+9)
 
 /*
+ * PVM_EVENT_FLAGS_EF
+ *	- Event enable flag. The flag is set to respond to events;
+ *	  and cleared to inhibit events. When the hypervisor try to inject
+ *	  an event except for NMI with PVM_EVENT_FLAGS_EF cleared, it will
+ *	  morph it to triple-fault.
+ *
+ * PVM_EVENT_FLAGS_EP
+ *	- Event pending flag. The hypervisor sets it if it fails to inject
+ *	  an event (NMI) to the VCPU due to the event-enable flag being
+ *	  cleared in supervisor mode.
+ *
  * PVM_EVENT_FLAGS_IF
  *	- Interrupt enable flag. The flag is set to respond to maskable
  *	  external interrupts; and cleared to inhibit maskable external
@@ -69,6 +79,10 @@
  *	  a maskable event to the VCPU due to the interrupt-enable flag being
  *	  cleared in supervisor mode.
  */
+#define PVM_EVENT_FLAGS_EF_BIT		0
+#define PVM_EVENT_FLAGS_EF		_BITUL(PVM_EVENT_FLAGS_EF_BIT)
+#define PVM_EVENT_FLAGS_EP_BIT		1
+#define PVM_EVENT_FLAGS_EP		_BITUL(PVM_EVENT_FLAGS_EP_BIT)
 #define PVM_EVENT_FLAGS_IP_BIT		8
 #define PVM_EVENT_FLAGS_IP		_BITUL(PVM_EVENT_FLAGS_IP_BIT)
 #define PVM_EVENT_FLAGS_IF_BIT		9
@@ -110,23 +124,6 @@ struct pvm_vcpu_struct {
 	u64 rsp;
 	u64 rcx;
 	u64 r11;
-};
-
-/*
- * PVM event delivery saves the information about the event and the old context
- * on the stack with the following frame format if the event is from supervisor
- * mode with vector <32. And ERETS synthetic instruction reads the return state
- * with the following frame format from the stack to restore the old context.
- */
-struct pvm_supervisor_event {
-	unsigned long errcode; // vector in high32
-	unsigned long rip;
-	unsigned long cs;
-	unsigned long rflags;
-	unsigned long rsp;
-	unsigned long ss;
-	unsigned long rcx;
-	unsigned long r11;
 };
 
 #endif /* __ASSEMBLY__ */
