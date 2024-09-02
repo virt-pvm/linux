@@ -2168,6 +2168,19 @@ static int handle_exit_breakpoint(struct kvm_vcpu *vcpu)
 	return 1;
 }
 
+static void handle_cpuid(struct kvm_vcpu *vcpu)
+{
+	u32 eax, ebx, ecx, edx;
+
+	eax = kvm_rax_read(vcpu);
+	ecx = kvm_rcx_read(vcpu);
+	kvm_cpuid(vcpu, &eax, &ebx, &ecx, &edx, false);
+	kvm_rax_write(vcpu, eax);
+	kvm_rbx_write(vcpu, ebx);
+	kvm_rcx_write(vcpu, ecx);
+	kvm_rdx_write(vcpu, edx);
+}
+
 static bool handle_synthetic_instruction_pvm_cpuid(struct kvm_vcpu *vcpu)
 {
 	/* invlpg 0xffffffffff4d5650; cpuid; */
@@ -2178,24 +2191,37 @@ static bool handle_synthetic_instruction_pvm_cpuid(struct kvm_vcpu *vcpu)
 	if (kvm_read_guest_virt(vcpu, kvm_get_linear_rip(vcpu),
 				insns, sizeof(insns), &e) == 0 &&
 	    memcmp(insns, pvm_synthetic_cpuid_insns, sizeof(insns)) == 0) {
-		u32 eax, ebx, ecx, edx;
-
 		if (unlikely(pvm_guest_allowed_va(vcpu, PVM_SYNTHETIC_CPUID_ADDRESS)))
 			kvm_mmu_invlpg(vcpu, PVM_SYNTHETIC_CPUID_ADDRESS);
 
-		eax = kvm_rax_read(vcpu);
-		ecx = kvm_rcx_read(vcpu);
-		kvm_cpuid(vcpu, &eax, &ebx, &ecx, &edx, false);
-		kvm_rax_write(vcpu, eax);
-		kvm_rbx_write(vcpu, ebx);
-		kvm_rcx_write(vcpu, ecx);
-		kvm_rdx_write(vcpu, edx);
-
+		handle_cpuid(vcpu);
 		kvm_rip_write(vcpu, kvm_rip_read(vcpu) + sizeof(insns));
 		return true;
 	}
 
 	return false;
+}
+
+/*
+ * Handle the guest initiated #VE.
+ *
+ * Only EXIT_REASON_CPUID is allowed for now, see virt_exception_user()
+ * in arch/x86/coco/tdx/tdx.c.
+ */
+static void handle_exit_virtual_exception(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	switch (pvm->exit_ve.exit_reason) {
+	case EXIT_REASON_CPUID:
+		handle_cpuid(vcpu);
+		kvm_rip_write(vcpu, kvm_rip_read(vcpu) + pvm->exit_ve.instr_len);
+		break;
+	default:
+		pr_warn("Unexpected #VE: %lld\n", pvm->exit_ve.exit_reason);
+		kvm_queue_exception_e(vcpu, GP_VECTOR, 0);
+		break;
+	}
 }
 
 static int handle_exit_exception(struct kvm_vcpu *vcpu)
@@ -2271,8 +2297,8 @@ static int handle_exit_exception(struct kvm_vcpu *vcpu)
 		// NMI is handled by pvm_vcpu_run_noinstr().
 		return 1;
 	case VE_VECTOR:
-		// TODO: tdx_handle_virt_exception(regs, &pvm->exit_ve); break;
-		goto unknown_exit_reason;
+		handle_exit_virtual_exception(vcpu);
+		return 1;
 	case X86_TRAP_VC:
 		// TODO: handle the second part for #VC.
 		goto unknown_exit_reason;
