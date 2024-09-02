@@ -629,6 +629,7 @@ void tdx_get_ve_info(struct ve_info *ve)
 	ve->instr_len   = lower_32_bits(args.r10);
 	ve->instr_info  = upper_32_bits(args.r10);
 }
+EXPORT_SYMBOL_GPL(tdx_get_ve_info);
 
 /*
  * Handle the user initiated #VE.
