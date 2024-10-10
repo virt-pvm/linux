@@ -750,7 +750,7 @@ static bool check_switch_cr3(struct vcpu_pvm *pvm, u64 switch_host_cr3)
 
 static void pvm_set_host_cr3_for_guest(struct vcpu_pvm *pvm)
 {
-	u64 hw_cr3 = pvm->vcpu.arch.mmu->root.hpa;
+	u64 hw_cr3 = __sme_set(pvm->vcpu.arch.mmu->root.hpa);
 	u64 enter_hw_cr3 = hw_cr3;
 	u64 switch_host_cr3;
 
