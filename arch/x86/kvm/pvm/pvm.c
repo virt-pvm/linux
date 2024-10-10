@@ -735,33 +735,42 @@ static bool check_switch_cr3(struct vcpu_pvm *pvm, u64 switch_host_cr3)
 		return false;
 	if (!VALID_PAGE(root))
 		return false;
-	if (host_pcid_owner(switch_host_cr3 & X86_CR3_PCID_MASK) != pvm)
-		return false;
-	if (host_pcid_root(switch_host_cr3 & X86_CR3_PCID_MASK) != root)
-		return false;
 	if (root != (switch_host_cr3 & CR3_ADDR_MASK))
 		return false;
+
+	if (static_cpu_has(X86_FEATURE_PCID)) {
+		if (host_pcid_owner(switch_host_cr3 & X86_CR3_PCID_MASK) != pvm)
+			return false;
+		if (host_pcid_root(switch_host_cr3 & X86_CR3_PCID_MASK) != root)
+			return false;
+	}
 
 	return true;
 }
 
-static void pvm_set_host_cr3_for_guest_with_host_pcid(struct vcpu_pvm *pvm)
+static void pvm_set_host_cr3_for_guest(struct vcpu_pvm *pvm)
 {
-	u64 root_hpa = pvm->vcpu.arch.mmu->root.hpa;
-	bool flush = false;
-	u32 host_pcid = host_pcid_get(pvm, root_hpa, &flush);
-	u64 hw_cr3 = root_hpa | host_pcid;
+	u64 hw_cr3 = pvm->vcpu.arch.mmu->root.hpa;
+	u64 enter_hw_cr3 = hw_cr3;
 	u64 switch_host_cr3;
 
-	if (!flush)
-		hw_cr3 |= CR3_NOFLUSH;
-	this_cpu_write(cpu_tss_rw.tss_ex.enter_cr3, hw_cr3);
+	if (static_cpu_has(X86_FEATURE_PCID)) {
+		bool flush = false;
+		u32 host_pcid = host_pcid_get(pvm, hw_cr3, &flush);
+
+		enter_hw_cr3 |= host_pcid;
+		if (!flush)
+			enter_hw_cr3 |= CR3_NOFLUSH;
+		hw_cr3 |= host_pcid | CR3_NOFLUSH;
+	}
+
+	this_cpu_write(cpu_tss_rw.tss_ex.enter_cr3, enter_hw_cr3);
 
 	if (is_smod(pvm)) {
-		this_cpu_write(cpu_tss_rw.tss_ex.smod_cr3, hw_cr3 | CR3_NOFLUSH);
+		this_cpu_write(cpu_tss_rw.tss_ex.smod_cr3, hw_cr3);
 		switch_host_cr3 = this_cpu_read(cpu_tss_rw.tss_ex.umod_cr3);
 	} else {
-		this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, hw_cr3 | CR3_NOFLUSH);
+		this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, hw_cr3);
 		switch_host_cr3 = this_cpu_read(cpu_tss_rw.tss_ex.smod_cr3);
 	}
 
@@ -769,30 +778,6 @@ static void pvm_set_host_cr3_for_guest_with_host_pcid(struct vcpu_pvm *pvm)
 		pvm->switch_flags &= ~SWITCH_FLAGS_NO_DS_CR3;
 	else
 		pvm->switch_flags |= SWITCH_FLAGS_NO_DS_CR3;
-}
-
-static void pvm_set_host_cr3_for_guest_without_host_pcid(struct vcpu_pvm *pvm)
-{
-	u64 root_hpa = pvm->vcpu.arch.mmu->root.hpa;
-	u64 switch_root = 0;
-	u64 prev_root_hpa = pvm->vcpu.arch.mmu->prev_roots[0].hpa;
-
-	if (VALID_PAGE(prev_root_hpa) &&
-	    pvm->vcpu.arch.mmu->prev_roots[0].pgd == pvm->msr_switch_cr3) {
-		switch_root = prev_root_hpa;
-		pvm->switch_flags &= ~SWITCH_FLAGS_NO_DS_CR3;
-	} else {
-		pvm->switch_flags |= SWITCH_FLAGS_NO_DS_CR3;
-	}
-
-	this_cpu_write(cpu_tss_rw.tss_ex.enter_cr3, root_hpa);
-	if (is_smod(pvm)) {
-		this_cpu_write(cpu_tss_rw.tss_ex.smod_cr3, root_hpa);
-		this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, switch_root);
-	} else {
-		this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, root_hpa);
-		this_cpu_write(cpu_tss_rw.tss_ex.smod_cr3, switch_root);
-	}
 }
 
 static void pvm_set_host_cr3_for_hypervisor(struct vcpu_pvm *pvm)
@@ -813,11 +798,7 @@ static void pvm_set_host_cr3_for_hypervisor(struct vcpu_pvm *pvm)
 static void pvm_set_host_cr3(struct vcpu_pvm *pvm)
 {
 	pvm_set_host_cr3_for_hypervisor(pvm);
-
-	if (static_cpu_has(X86_FEATURE_PCID))
-		pvm_set_host_cr3_for_guest_with_host_pcid(pvm);
-	else
-		pvm_set_host_cr3_for_guest_without_host_pcid(pvm);
+	pvm_set_host_cr3_for_guest(pvm);
 }
 
 static void pvm_load_mmu_pgd(struct kvm_vcpu *vcpu, hpa_t root_hpa,
