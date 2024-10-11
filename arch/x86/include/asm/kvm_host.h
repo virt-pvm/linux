@@ -724,6 +724,15 @@ struct kvm_queued_exception {
 	bool has_payload;
 };
 
+#define KVM_VM_GPTEPS_BUFFER_LEN	1024
+#define KVM_VCPU_GPTEPS_BUFFER_LEN	512
+
+struct kvm_gpteps_buffer {
+	u64 *buf;
+	u32 len;
+	u32 cap;
+};
+
 struct kvm_vcpu_arch {
 	/*
 	 * rip and regs accesses must go through
@@ -1016,6 +1025,18 @@ struct kvm_vcpu_arch {
 
 	/* Protected Guests */
 	bool guest_state_protected;
+
+	struct {
+		/*
+		 * Record all gpteps that should be synced later
+		 * in the next tlb flush hypercall.
+		 */
+		struct kvm_gpteps_buffer gpteps;
+		u64 buf[KVM_VCPU_GPTEPS_BUFFER_LEN];
+
+		u64 msr_val;
+		struct gfn_to_hva_cache cache;
+	} pv_mmu;
 
 	/*
 	 * Set when PDPTS were loaded directly by the userspace without
@@ -1432,6 +1453,13 @@ struct kvm_arch {
 	 */
 	spinlock_t tdp_mmu_pages_lock;
 #endif /* CONFIG_X86_64 */
+
+	struct {
+		/* Temporary space for copying gpteps from guest */
+		struct kvm_gpteps_buffer gpteps;
+		u64 buf[KVM_VM_GPTEPS_BUFFER_LEN];
+		bool enabled;
+	} pv_mmu;
 
 	/*
 	 * The root page table contains the host mapping PGDs, which will be

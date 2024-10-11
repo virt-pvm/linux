@@ -1525,6 +1525,7 @@ static const u32 emulated_msrs_all[] = {
 
 	MSR_KVM_ASYNC_PF_EN, MSR_KVM_STEAL_TIME,
 	MSR_KVM_PV_EOI_EN, MSR_KVM_ASYNC_PF_INT, MSR_KVM_ASYNC_PF_ACK,
+	MSR_KVM_PV_MMU_BUFFER,
 
 	MSR_PVM_LINEAR_ADDRESS_RANGE,
 	MSR_PVM_VCPU_STRUCT,
@@ -4001,6 +4002,21 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 			return 1;
 
 		vcpu->arch.msr_kvm_poll_control = data;
+		break;
+	case MSR_KVM_PV_MMU_BUFFER:
+		if (!guest_pv_has(vcpu, KVM_FEATURE_PV_MMU))
+			return 1;
+
+		if (!(data & KVM_MSR_ENABLED))
+			break;
+
+		if (kvm_gfn_to_hva_cache_init(vcpu->kvm, &vcpu->arch.pv_mmu.cache,
+					      (data & ~0x7), PAGE_SIZE))
+			return 1;
+
+		vcpu->arch.pv_mmu.msr_val = data;
+		if (!kvm_pv_mmu_enabled(vcpu->kvm))
+			kvm_pv_mmu_init(vcpu->kvm);
 		break;
 
 	case MSR_IA32_MCG_CTL:
@@ -9932,6 +9948,33 @@ no_yield:
 	return;
 }
 
+static unsigned int kvm_pv_mmu_set_ptes(struct kvm_vcpu *vcpu, unsigned int offset,
+					unsigned int len, unsigned long flags)
+{
+	len = min_t(unsigned int, len, KVM_VCPU_GPTEPS_BUFFER_LEN);
+	if (!len)
+		return 0;
+
+	if (kvm_read_guest_offset_cached(vcpu->kvm, &vcpu->arch.pv_mmu.cache,
+					 vcpu->arch.pv_mmu.gpteps.buf,
+					 offset *sizeof(u64), len * sizeof(u64)))
+		return 0;
+
+	vcpu->arch.pv_mmu.gpteps.len = len;
+	kvm_pv_mmu_commit_ptes(vcpu);
+
+	if (flags & KVM_PV_MMU_TLB_FLUSH) {
+		kvm_make_request(KVM_REQ_TLB_FLUSH_GUEST, vcpu);
+	} else if (flags & KVM_PV_MMU_TLB_FLUSH_CURRENT) {
+		kvm_make_request(KVM_REQ_MMU_SYNC, vcpu);
+		kvm_make_request(KVM_REQ_TLB_FLUSH_CURRENT, vcpu);
+	} else if (flags & KVM_PV_MMU_INVLPG) {
+		kvm_mmu_invlpg(vcpu, flags & ~KVM_PV_MMU_FLAGS_MASK);
+	}
+
+	return len;
+}
+
 static int complete_hypercall_exit(struct kvm_vcpu *vcpu)
 {
 	u64 ret = vcpu->run->hypercall.ret;
@@ -10039,6 +10082,15 @@ int kvm_handle_hypercall(struct kvm_vcpu *vcpu, bool skip)
 
 		kvm_pv_mmu_release_pt(vcpu->kvm, a0);
 		ret = 0;
+		break;
+	case KVM_HC_PV_MMU_SET_PTES:
+		if (!guest_pv_has(vcpu, KVM_FEATURE_PV_MMU))
+			break;
+
+		if (!kvm_pv_mmu_enabled(vcpu->kvm))
+			break;
+
+		ret = kvm_pv_mmu_set_ptes(vcpu, a0, a1, a2);
 		break;
 	}
 	default:

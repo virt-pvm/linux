@@ -183,6 +183,8 @@ static struct percpu_counter kvm_total_used_mmu_pages;
 
 static void mmu_spte_set(u64 *sptep, u64 spte);
 
+static void pv_mmu_flush_ptes(struct kvm_vcpu *vcpu);
+
 struct kvm_mmu_role_regs {
 	const unsigned long cr0;
 	const unsigned long cr4;
@@ -833,6 +835,9 @@ static void account_shadowed(struct kvm *kvm, struct kvm_mmu_page *sp)
 	if (sp->role.level > PG_LEVEL_4K)
 		return __kvm_write_track_add_gfn(kvm, slot, gfn);
 
+	if (kvm_pv_mmu_enabled(kvm))
+		return;
+
 	kvm_mmu_gfn_disallow_lpage(slot, gfn);
 
 	if (kvm_mmu_slot_gfn_write_protect(kvm, slot, gfn, PG_LEVEL_4K))
@@ -878,6 +883,9 @@ static void unaccount_shadowed(struct kvm *kvm, struct kvm_mmu_page *sp)
 	slot = __gfn_to_memslot(slots, gfn);
 	if (sp->role.level > PG_LEVEL_4K)
 		return __kvm_write_track_remove_gfn(kvm, slot, gfn);
+
+	if (kvm_pv_mmu_enabled(kvm))
+		return;
 
 	kvm_mmu_gfn_allow_lpage(slot, gfn);
 }
@@ -2303,6 +2311,8 @@ static struct kvm_mmu_page *__kvm_mmu_get_shadow_page(struct kvm *kvm,
 	if (!sp) {
 		created = true;
 		sp = kvm_mmu_alloc_shadow_page(kvm, caches, gfn, sp_list, role);
+	} else if (sp->unsync_children && kvm_pv_mmu_enabled(kvm)) {
+		sp->unsync_children = 0;
 	}
 
 	trace_kvm_mmu_get_page(sp, created);
@@ -2837,6 +2847,9 @@ int mmu_try_to_unsync_pages(struct kvm *kvm, const struct kvm_memory_slot *slot,
 	 */
 	if (kvm_gfn_is_write_tracked(kvm, slot, gfn))
 		return -EPERM;
+
+	if (kvm_pv_mmu_enabled(kvm))
+		return 0;
 
 	/*
 	 * The page is not write-tracked, mark existing shadow pages unsync
@@ -4041,6 +4054,13 @@ void kvm_mmu_sync_roots(struct kvm_vcpu *vcpu)
 
 	if (vcpu->arch.mmu->cpu_role.base.level >= PT64_ROOT_4LEVEL) {
 		hpa_t root = vcpu->arch.mmu->root.hpa;
+
+		if (kvm_pv_mmu_enabled(vcpu->kvm)) {
+			if (!smp_load_acquire(&vcpu->kvm->arch.pv_mmu.gpteps.len))
+				return;
+
+			pv_mmu_flush_ptes(vcpu);
+		}
 
 		if (!is_unsync_root(root))
 			return;
@@ -5747,6 +5767,168 @@ void kvm_pv_mmu_release_pt(struct kvm *kvm, gfn_t table_gfn)
 	kvm_mmu_unprotect_page(kvm, table_gfn);
 }
 
+static bool pv_mmu_update_spte(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
+			       int index, unsigned int gpte_access)
+{
+	bool host_writable;
+	gfn_t gfn;
+	struct kvm_memory_slot *slot;
+	u64 *sptep = &sp->spt[index];
+	u64 spte = sp->spt[index];
+	unsigned int pte_access;
+	unsigned int pte_access_mask = ACC_ALL;
+
+	if (gpte_access & KVM_PV_MMU_PTE_NP) {
+		drop_spte(vcpu->kvm, sptep);
+		return true;
+	}
+
+	if (gpte_access & KVM_PV_MMU_PTE_RO)
+		pte_access_mask &= ~ACC_WRITE_MASK;
+
+	if (unlikely(is_mmio_spte(spte))) {
+		gfn = get_mmio_spte_gfn(spte);
+		pte_access = get_mmio_spte_access(spte) & pte_access_mask;
+
+		mark_mmio_spte(vcpu, sptep, gfn, pte_access);
+		return false;
+	}
+
+	if (pte_access_mask == ACC_ALL)
+		return false;
+
+	pte_access = kvm_mmu_page_get_access(sp, index);
+	pte_access &= pte_access_mask;
+	gfn = kvm_mmu_page_get_gfn(sp, index);
+	host_writable = spte & shadow_host_writable_mask;
+	slot = kvm_vcpu_gfn_to_memslot(vcpu, gfn);
+	kvm_mmu_page_set_access(sp, index, pte_access);
+	make_spte(vcpu, sp, slot, pte_access, gfn, spte_to_pfn(spte), spte,
+		  true, false, host_writable, &spte);
+
+	return mmu_spte_update(sptep, spte);
+}
+
+static int pv_mmu_sync_spte(struct kvm_vcpu *vcpu, gpa_t gptep)
+{
+	bool flush = false;
+	gfn_t gfn = gpa_to_gfn(gptep);
+	unsigned int gpte_access = gptep & KVM_PV_MMU_PTE_ALL;
+	int index = offset_in_page(gptep) / sizeof(u64);
+	struct kvm_mmu_page *sp;
+
+	for_each_gfn_valid_sp_with_gptes(vcpu->kvm, sp, gfn) {
+		if (!sp->spt[index])
+			continue;
+
+		/*
+		 * It's possible that guest use same gfn for
+		 * different level. However, gfn must be
+		 * write protected, just ignore it.
+		 */
+		if (sp->role.level != PG_LEVEL_4K)
+			continue;
+		else
+			flush |= pv_mmu_update_spte(vcpu, sp, index, gpte_access);
+	}
+
+	return flush;
+}
+
+static void __flush_ptes(struct kvm_vcpu *vcpu, struct kvm_gpteps_buffer *gpteps)
+{
+	int i;
+	bool flush = false;
+
+	for (i = 0; i < gpteps->len; i++)
+		flush |= pv_mmu_sync_spte(vcpu, gpteps->buf[i]);
+
+	if (flush)
+		kvm_flush_remote_tlbs(vcpu->kvm);
+
+	/*
+	 * The write barrier below ensures that the spte change is made before
+	 * setting gpteps->len to zero. This pairs with the smp_load_acquire()
+	 * in kvm_mmu_sync_roots().
+	 */
+	smp_wmb();
+	gpteps->len = 0;
+}
+
+static void pv_mmu_flush_ptes(struct kvm_vcpu *vcpu)
+{
+	write_lock(&vcpu->kvm->mmu_lock);
+	__flush_ptes(vcpu, &vcpu->kvm->arch.pv_mmu.gpteps);
+	write_unlock(&vcpu->kvm->mmu_lock);
+}
+
+void kvm_pv_mmu_commit_ptes(struct kvm_vcpu *vcpu)
+{
+	struct kvm_gpteps_buffer *src, *dst;
+
+	src = &vcpu->arch.pv_mmu.gpteps;
+	dst = &vcpu->kvm->arch.pv_mmu.gpteps;
+
+	BUILD_BUG_ON(KVM_VM_GPTEPS_BUFFER_LEN < KVM_VCPU_GPTEPS_BUFFER_LEN);
+
+	if (!src->len)
+		return;
+
+	write_lock(&vcpu->kvm->mmu_lock);
+
+	if (dst->len + src->len > dst->cap)
+		__flush_ptes(vcpu, dst);
+
+	memcpy(dst->buf + dst->len, src->buf, src->len * sizeof(u64));
+	dst->len += src->len;
+
+	write_unlock(&vcpu->kvm->mmu_lock);
+
+	src->len = 0;
+}
+
+void kvm_pv_mmu_init(struct kvm *kvm)
+{
+	struct kvm_mmu_page *sp, *node;
+	LIST_HEAD(invalid_list);
+
+	write_lock(&kvm->mmu_lock);
+
+	if (kvm_pv_mmu_enabled(kvm)) {
+		write_unlock(&kvm->mmu_lock);
+		return;
+	}
+
+	/*
+	 * Zap all unsync SPs before enabling PV MMU mode.
+	 *
+	 * TODO: Mark all unsynchronized roots as synchronized, as the zapping
+	 * process does not mark them as synchronized, and kvm_mmu_sync_roots()
+	 * won't perform mmu_sync_children() after enabling PV MMU mode, so we
+	 * may observe unsynchronized root exits in PV MMU mode. However, it
+	 * does no harm at all. There is a temporary hack in
+	 * __kvm_mmu_get_shadow_page() to clear 'sp->unsync_children' when the
+	 * shadow SP is reused.
+	 */
+restart:
+	list_for_each_entry_safe(sp, node, &kvm->arch.active_mmu_pages, link) {
+		if (sp->role.level != PG_LEVEL_4K)
+			continue;
+		if (!sp->unsync)
+			continue;
+
+		kvm_mmu_prepare_zap_page(kvm, sp, &invalid_list);
+
+		if (cond_resched_rwlock_write(&kvm->mmu_lock))
+			goto restart;
+	}
+
+	kvm_mmu_commit_zap_page(kvm, &invalid_list);
+	kvm->arch.pv_mmu.enabled = true;
+
+	write_unlock(&kvm->mmu_lock);
+}
+
 int noinline kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa, u64 error_code,
 		       void *insn, int insn_len)
 {
@@ -5874,6 +6056,11 @@ void kvm_mmu_invalidate_addr(struct kvm_vcpu *vcpu, struct kvm_mmu *mmu,
 
 	if (!mmu->sync_spte)
 		return;
+
+	if (kvm_pv_mmu_enabled(vcpu->kvm)) {
+		kvm_make_request(KVM_REQ_MMU_SYNC, vcpu);
+		return;
+	}
 
 	if (roots & KVM_MMU_ROOT_CURRENT)
 		__kvm_mmu_invalidate_addr(vcpu, mmu, addr, mmu->root.hpa);
@@ -6085,6 +6272,9 @@ int kvm_mmu_create(struct kvm_vcpu *vcpu)
 	vcpu->arch.mmu = &vcpu->arch.root_mmu;
 	vcpu->arch.walk_mmu = &vcpu->arch.root_mmu;
 
+	vcpu->arch.pv_mmu.gpteps.buf = &vcpu->arch.pv_mmu.buf[0];
+	vcpu->arch.pv_mmu.gpteps.cap = ARRAY_SIZE(vcpu->arch.pv_mmu.buf);
+
 	ret = __kvm_mmu_create(vcpu, &vcpu->arch.guest_mmu);
 	if (ret)
 		return ret;
@@ -6238,6 +6428,9 @@ void kvm_mmu_init_vm(struct kvm *kvm)
 
 	kvm->arch.split_desc_cache.kmem_cache = pte_list_desc_cache;
 	kvm->arch.split_desc_cache.gfp_zero = __GFP_ZERO;
+
+	kvm->arch.pv_mmu.gpteps.buf = &kvm->arch.pv_mmu.buf[0];
+	kvm->arch.pv_mmu.gpteps.cap = ARRAY_SIZE(kvm->arch.pv_mmu.buf);
 }
 
 static void mmu_free_vm_memory_caches(struct kvm *kvm)

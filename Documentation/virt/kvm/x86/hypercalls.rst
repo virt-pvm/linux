@@ -201,3 +201,22 @@ a0: the guest physical address of the page table
 
 The hypercall lets a guest to notify KVM to release the shadowed PT directly
 when the guest is ready to reclaim the memory of the page table.
+
+10. KVM_HC_PV_MMU_SET_PTES
+----------------------------
+:Architecture: x86
+:Status: active
+:Purpose: Request KVM to synchronize the associated SPTEs for the GPTEs
+          in the buffer.
+
+a0: the start index of target GPTEs in the buffer
+a1: the count of target GPTEs
+a2: the TLB flushing related flags
+
+    Where 'flags' :
+        * bit     0 - KVM_PV_MMU_FLUSH_TLB
+          bit     1 - KVM_PV_MMU_FLUSH_TLB_CURRENT
+          bit     2 - KVM_PV_MMU_INVLPG
+
+The hypercall lets a guest to notify KVM to synchronize the associated SPTEs
+for the GPTEs in the shared buffer.
