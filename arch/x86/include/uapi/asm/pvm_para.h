@@ -47,7 +47,7 @@
 #define PVM_HC_SPECIAL_MAX		(PVM_HC_SPECIAL_BASE+PVM_HC_SPECIAL_MAX_NR)
 
 #define PVM_HC_LOAD_PGTBL		(PVM_HC_SPECIAL_BASE+0)
-#define PVM_HC_EVENT_WIN		(PVM_HC_SPECIAL_BASE+1)
+#define PVM_HC_IRQ_WIN			(PVM_HC_SPECIAL_BASE+1)
 #define PVM_HC_IRQ_HALT			(PVM_HC_SPECIAL_BASE+2)
 #define PVM_HC_TLB_FLUSH		(PVM_HC_SPECIAL_BASE+3)
 #define PVM_HC_TLB_FLUSH_CURRENT	(PVM_HC_SPECIAL_BASE+4)
@@ -58,17 +58,6 @@
 #define PVM_HC_LOAD_TLS			(PVM_HC_SPECIAL_BASE+9)
 
 /*
- * PVM_EVENT_FLAGS_EF
- *	- Event enable flag. The flag is set to respond to events;
- *	  and cleared to inhibit events. When the hypervisor try to inject
- *	  an event except for NMI with PVM_EVENT_FLAGS_EF cleared, it will
- *	  morph it to triple-fault.
- *
- * PVM_EVENT_FLAGS_EP
- *	- Event pending flag. The hypervisor sets it if it fails to inject
- *	  an event (NMI) to the VCPU due to the event-enable flag being
- *	  cleared in supervisor mode.
- *
  * PVM_EVENT_FLAGS_IF
  *	- Interrupt enable flag. The flag is set to respond to maskable
  *	  external interrupts; and cleared to inhibit maskable external
@@ -79,14 +68,48 @@
  *	  a maskable event to the VCPU due to the interrupt-enable flag being
  *	  cleared in supervisor mode.
  */
-#define PVM_EVENT_FLAGS_EF_BIT		0
-#define PVM_EVENT_FLAGS_EF		_BITUL(PVM_EVENT_FLAGS_EF_BIT)
-#define PVM_EVENT_FLAGS_EP_BIT		1
-#define PVM_EVENT_FLAGS_EP		_BITUL(PVM_EVENT_FLAGS_EP_BIT)
 #define PVM_EVENT_FLAGS_IP_BIT		8
 #define PVM_EVENT_FLAGS_IP		_BITUL(PVM_EVENT_FLAGS_IP_BIT)
 #define PVM_EVENT_FLAGS_IF_BIT		9
 #define PVM_EVENT_FLAGS_IF		_BITUL(PVM_EVENT_FLAGS_IF_BIT)
+
+/*
+ * Bits for event_vector.
+ *
+ * The lowest 8-bit is the vector number for non async-exception vector events.
+ *
+ * The highest 8-bit is defined as following.  When the highest 8-bit is
+ * non-zero in supervisor mode, only async-exception can be delivered without
+ * jumping to the entry point.  The guest supervisor should check any pending
+ * NMI/MCE when handling any events.  The hypervisor will also check it
+ * for pending NMI/MCE in handling ERETU/ERETS.  Trying to deliver a non
+ * async-exception when the highest 8-bit is non-zero in supervisor mode
+ * will make it morphed into a triple-fault.
+ *
+ * The supervisor code should clear the highest 8-bit and get all the
+ * delivered events from event_vector in a appropriate way.
+ *
+ * PVM_PVCS_EVENT_VECTOR_STD:
+ *	- The supervisor software should set this bit before access to PVCS
+ *	  for ERETU/ERETS.  The event_vector remains to be this value during
+ *	  user mode and upon delivering a SYSCALL event from user mode.
+ *	  Since async-exception can be dilivered and access to PVCS any time,
+ *	  so it is required for protecting the fields related to supervisor
+ *	  event delivering.
+ *	- When a non async-exception is delivered, this bit is set and the
+ *	  lowest 8-bit is the vector number.
+ *
+ * PVM_PVCS_EVENT_VECTOR_NMI
+ * PVM_PVCS_EVENT_VECTOR_MCE
+ *	- An NMI or MCE is being delivered (or along with other events) or
+ *	  pending (during the period the supervisor is about to ERETU/ERETS)
+ */
+#define PVM_PVCS_EVENT_VECTOR_STD_BIT		8
+#define PVM_PVCS_EVENT_VECTOR_STD		_BITUL(PVM_PVCS_EVENT_VECTOR_STD_BIT)
+#define PVM_PVCS_EVENT_VECTOR_NMI_BIT		9
+#define PVM_PVCS_EVENT_VECTOR_NMI		_BITUL(PVM_PVCS_EVENT_VECTOR_NMI_BIT)
+#define PVM_PVCS_EVENT_VECTOR_MCE_BIT		10
+#define PVM_PVCS_EVENT_VECTOR_MCE		_BITUL(PVM_PVCS_EVENT_VECTOR_MCE_BIT)
 
 #define PVM_LOAD_PGTBL_FLAGS_TLB	_BITUL(0)
 #define PVM_LOAD_PGTBL_FLAGS_LA57	_BITUL(1)
@@ -105,17 +128,14 @@ struct pvm_vcpu_struct {
 	 * bit 9 being valid. The other bits are reserved.
 	 */
 	u64 event_flags;
-	u32 event_errcode;
-	u32 event_vector;
 	u64 cr2;
-	u64 reserved0[5];
+	u64 reserved0[6];
 
-	/*
-	 * For the event from supervisor mode with vector >=32, only eflags,
-	 * rip, rsp, rcx and r11 are saved, and others keep untouched.
-	 */
+	// For ERETS and the event from supervisor mode, user_cs, user_ss
+	// user_gsbase, and pkru are ignored and kept untouched.
 	u16 user_cs, user_ss;
-	u32 reserved1;
+	u16 event_errcode;
+	u16 event_vector;
 	u64 reserved2;
 	u64 user_gsbase;
 	u32 eflags;

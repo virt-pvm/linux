@@ -245,8 +245,10 @@ PVCS::event_flags
   due to the interrupt-enable flag being cleared in supervisor mode.
 |   The guest is responsible for issuing a hypercall PVM_HC_IRQ_WIN when
     the guest sees this bit after setting the PVCS::event_flags.IF.
-    The hypervisor clears this bit in handling
-    PVM_HC_IRQ_WIN/IRQ_HLT/EVENT_RETURN_USER/EVENT_RETURN_HYPERVISOR.
+    This bit might be left over without actual pending interrupt in some
+    cases, which is harmless.  The hypervisor clears this bit in handling
+    PVM_HC_IRQ_WIN/IRQ_HLT/EVENT_RETURN_SUPERVISOR when interrupt is
+    enabled.
 
 Other bits are reserved (Software should set them to zero).
 
