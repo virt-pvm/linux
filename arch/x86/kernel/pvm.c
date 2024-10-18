@@ -202,9 +202,11 @@ static void pvm_flush_tlb_one_user(unsigned long addr)
 	pvm_hypercall1(PVM_HC_TLB_INVLPG, addr);
 }
 
-void __init pvm_early_event(struct pt_regs *regs)
+void __init pvm_early_event(struct pt_regs *regs, u32 vector, u32 errcode)
 {
-	int vector = regs->orig_ax >> 32;
+	if (!likely(vector & PVM_PVCS_EVENT_VECTOR_STD))
+		return;
+	vector &= 0xFF;
 
 	if (!early_traps_setup) {
 		do_early_exception(regs, vector);
@@ -219,7 +221,7 @@ void __init pvm_early_event(struct pt_regs *regs)
 		exc_int3(regs);
 		return;
 	case X86_TRAP_PF:
-		exc_page_fault(regs, regs->orig_ax);
+		exc_page_fault(regs, errcode);
 		return;
 	default:
 		do_early_exception(regs, vector);
@@ -292,12 +294,6 @@ DEFINE_IDTENTRY_RAW(pvm_exc_machine_check)
 static noinstr void pvm_exception(struct pt_regs *regs, unsigned long vector,
 				  unsigned long error_code)
 {
-	/* Optimize for #PF. That's the only exception which matters performance wise */
-	if (likely(vector == X86_TRAP_PF)) {
-		exc_page_fault(regs, error_code);
-		return;
-	}
-
 	switch (vector) {
 	case X86_TRAP_DE: return exc_divide_error(regs);
 	case X86_TRAP_DB: return pvm_exc_debug(regs);
@@ -312,6 +308,7 @@ static noinstr void pvm_exception(struct pt_regs *regs, unsigned long vector,
 	case X86_TRAP_NP: return exc_segment_not_present(regs, error_code);
 	case X86_TRAP_SS: return exc_stack_segment(regs, error_code);
 	case X86_TRAP_GP: return exc_general_protection(regs, error_code);
+	case X86_TRAP_PF: return exc_page_fault(regs, error_code);
 	case X86_TRAP_MF: return exc_coprocessor_error(regs);
 	case X86_TRAP_AC: return exc_alignment_check(regs, error_code);
 	case X86_TRAP_XF: return exc_simd_coprocessor_error(regs);
@@ -397,18 +394,26 @@ static __always_inline void pvm_handle_sysvec(struct pt_regs *regs, unsigned lon
 	func(regs, vector);
 }
 
-__visible noinstr void pvm_event(struct pt_regs *regs)
+__visible noinstr void pvm_event(struct pt_regs *regs, u32 vector, u32 errcode)
 {
-	u32 error_code = regs->orig_ax;
-	u64 vector = regs->orig_ax >> 32;
+	/* Optimize for #PF. */
+	if (likely(vector == (PVM_PVCS_EVENT_VECTOR_STD | X86_TRAP_PF)))
+		return exc_page_fault(regs, errcode);
 
-	/* Invalidate orig_ax so that syscall_get_nr() works correctly */
-	regs->orig_ax = -1;
+	if (unlikely(vector & (PVM_PVCS_EVENT_VECTOR_NMI | PVM_PVCS_EVENT_VECTOR_MCE))) {
+		if (vector & PVM_PVCS_EVENT_VECTOR_MCE)
+			pvm_exception(regs, X86_TRAP_MC, 0);
+		if (vector & PVM_PVCS_EVENT_VECTOR_NMI)
+			pvm_exception(regs, X86_TRAP_NMI, 0);
+	}
+	if (!likely(vector & PVM_PVCS_EVENT_VECTOR_STD))
+		return;
 
-	if (vector < NUM_EXCEPTION_VECTORS)
-		pvm_exception(regs, vector, error_code);
-	else if (vector >= FIRST_SYSTEM_VECTOR)
+	vector &= 0xFF;
+	if (vector >= FIRST_SYSTEM_VECTOR)
 		pvm_handle_sysvec(regs, vector);
+	else if (vector < NUM_EXCEPTION_VECTORS)
+		pvm_exception(regs, vector, errcode);
 	else if (unlikely(vector == IA32_SYSCALL_VECTOR))
 		pvm_handle_INT80_compat(regs);
 	else
@@ -481,7 +486,6 @@ void __init pvm_early_setup(void)
 	pv_ops.mmu.flush_tlb_kernel = pvm_flush_tlb_kernel;
 	pv_ops.mmu.flush_tlb_one_user = pvm_flush_tlb_one_user;
 
-	this_cpu_write(pvm_vcpu_struct.event_flags, PVM_EVENT_FLAGS_EF);
 	wrmsrl(MSR_PVM_VCPU_STRUCT, __pa(this_cpu_ptr(&pvm_vcpu_struct)));
 	wrmsrl(MSR_PVM_EVENT_ENTRY, (unsigned long)(void *)pvm_early_kernel_event_entry - 512);
 	wrmsrl(MSR_PVM_RETS_RIP, (unsigned long)(void *)pvm_rets_rip);
@@ -508,7 +512,6 @@ void pvm_setup_event_handling(void)
 	if (boot_cpu_has(X86_FEATURE_KVM_PVM_GUEST)) {
 		u64 xpa = slow_virt_to_phys(this_cpu_ptr(&pvm_vcpu_struct));
 
-		this_cpu_write(pvm_vcpu_struct.event_flags, PVM_EVENT_FLAGS_EF);
 		wrmsrl(MSR_PVM_VCPU_STRUCT, xpa);
 		wrmsrl(MSR_PVM_EVENT_ENTRY, (unsigned long)(void *)pvm_user_event_entry);
 		wrmsrl(MSR_PVM_RETU_RIP, (unsigned long)(void *)pvm_retu_rip);

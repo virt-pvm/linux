@@ -11,7 +11,7 @@
 .macro PUSH_IRET_FRAME_FROM_PVCS user:req
 	.if \user == 1
 		movl	PER_CPU_VAR(pvm_vcpu_struct + PVCS_user_ss), %ecx
-		andq	$0xff, %rcx
+		andl	$0xFFFF, %ecx
 		pushq	%rcx				/* pt_regs->ss */
 	.else
 		pushq	$__KERNEL_DS
@@ -23,7 +23,7 @@
 
 	.if \user == 1
 		movl	PER_CPU_VAR(pvm_vcpu_struct + PVCS_user_cs), %ecx
-		andq	$0xff, %rcx
+		andl	$0xFFFF, %ecx
 		pushq	%rcx				/* pt_regs->cs */
 	.else
 		pushq	$__KERNEL_CS
@@ -36,19 +36,41 @@
 	movq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_r11), %r11
 .endm
 
-.macro pvm_enable_events
-	orq	$PVM_EVENT_FLAGS_EF, PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_flags)
-	btq	$PVM_EVENT_FLAGS_EP_BIT, PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_flags)
-	jnc	.L_no_event_pending_\@
-	pushq	%rax
-	movq	$PVM_HC_EVENT_WIN, %rax
-	call	pvm_hypercall
-	popq	%rax
-.L_no_event_pending_\@:
+.macro PUSH_REGS_AND_HANDLE_EVENT handler:req
+	/* Invalidate orig_ax so that syscall_get_nr() works correctly */
+	pushq	$-1
+	PUSH_AND_CLEAR_REGS
+
+	movw	PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_errcode), %dx
+	xorl	%esi,  %esi
+	// get all async exceptions and put PVCS with non-contended xchg
+	xchgw	%si, PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_vector)
+	movq	%rsp, %rdi	/* %rdi -> pt_regs */
+	call	\handler
 .endm
 
-.macro pvm_disable_events
-	btrq	$PVM_EVENT_FLAGS_EF_BIT, PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_flags)
+.macro POP_REGS_AND_LOAD_IRET_FRAME_INTO_PVCS
+	POP_REGS
+
+	// get PVCS before access to it
+	btsw	$PVM_PVCS_EVENT_VECTOR_STD_BIT, PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_vector)
+
+	// Copy %rcx, %r11 to the PVM CPU structure
+	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rcx)
+	movq	%r11, PER_CPU_VAR(pvm_vcpu_struct + PVCS_r11)
+
+	// Copy the IRET frame to the PVM CPU structure
+	// PVCS_user_cs/ss are ignored for ERETS, load them anyway
+	movq	1*8(%rsp), %rcx		/* RIP */
+	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rip)
+	movq	2*8(%rsp), %rcx		/* CS */
+	movw	%cx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_user_cs)
+	movq	3*8(%rsp), %rcx		/* RFLAGS */
+	movl	%ecx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_eflags)
+	movq	4*8(%rsp), %rcx		/* RSP */
+	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rsp)
+	movq	5*8(%rsp), %rcx		/* SS */
+	movw	%cx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_user_ss)
 .endm
 
 .code64
@@ -60,8 +82,14 @@ SYM_CODE_START(entry_SYSCALL_64_pvm)
 
 	PUSH_IRET_FRAME_FROM_PVCS user=1
 
-	pvm_enable_events
+	btrw	$PVM_PVCS_EVENT_VECTOR_STD_BIT, PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_vector)
+	cmpw	$0, PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_vector)
+	jz	entry_SYSCALL_64_after_hwframe
 
+.L_async_exception:
+	PUSH_REGS_AND_HANDLE_EVENT handler=pvm_event
+	POP_REGS
+	addq	$8, %rsp
 	jmp	entry_SYSCALL_64_after_hwframe
 SYM_CODE_END(entry_SYSCALL_64_pvm)
 
@@ -97,7 +125,7 @@ SYM_FUNC_START(pvm_irq_enable)
 	RET
 .L_maybe_interrupt_pending:
 	/* handle pending IRQ */
-	movq	$PVM_HC_EVENT_WIN, %rax
+	movq	$PVM_HC_IRQ_WIN, %rax
 	jmp	pvm_hypercall
 SYM_FUNC_END(pvm_irq_enable)
 .popsection
@@ -112,35 +140,10 @@ SYM_CODE_START(pvm_user_event_entry)
 	ENDBR
 
 	PUSH_IRET_FRAME_FROM_PVCS user=1
-	/* pt_regs->orig_ax: errcode and vector */
-	pushq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_errcode)
-
-	pvm_enable_events
-
-	PUSH_AND_CLEAR_REGS
-	movq	%rsp, %rdi	/* %rdi -> pt_regs */
-	call	pvm_event
+	PUSH_REGS_AND_HANDLE_EVENT handler=pvm_event
 
 SYM_INNER_LABEL(pvm_restore_regs_and_return_to_usermode, SYM_L_GLOBAL)
-	POP_REGS
-
-	pvm_disable_events
-
-	/* Copy %rcx, %r11 to the PVM CPU structure. */
-	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rcx)
-	movq	%r11, PER_CPU_VAR(pvm_vcpu_struct + PVCS_r11)
-
-	/* Copy the IRET frame to the PVM CPU structure. */
-	movq	1*8(%rsp), %rcx		/* RIP */
-	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rip)
-	movq	2*8(%rsp), %rcx		/* CS */
-	movw	%cx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_user_cs)
-	movq	3*8(%rsp), %rcx		/* RFLAGS */
-	movl	%ecx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_eflags)
-	movq	4*8(%rsp), %rcx		/* RSP */
-	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rsp)
-	movq	5*8(%rsp), %rcx		/* SS */
-	movw	%cx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_user_ss)
+	POP_REGS_AND_LOAD_IRET_FRAME_INTO_PVCS
 
 	/*
 	 * We are on the trampoline stack.  All regs are live.
@@ -172,34 +175,26 @@ SYM_CODE_START(pvm_kernel_event_entry)
 	/* TODO: check stack overflow */
 
 	PUSH_IRET_FRAME_FROM_PVCS user=0
-	/* pt_regs->orig_ax: errcode and vector */
-	pushq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_errcode)
+	PUSH_REGS_AND_HANDLE_EVENT handler=pvm_event
+	POP_REGS_AND_LOAD_IRET_FRAME_INTO_PVCS
 
-	pvm_enable_events
-
-	PUSH_AND_CLEAR_REGS
-	movq	%rsp, %rdi	/* %rdi -> pt_regs */
-	call	pvm_event
-
-SYM_INNER_LABEL(pvm_restore_regs_and_return_to_kernel, SYM_L_GLOBAL)
-	POP_REGS
-
-	pvm_disable_events
-
-	/* Copy %rcx, %r11 to the PVM CPU structure. */
-	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rcx)
-	movq	%r11, PER_CPU_VAR(pvm_vcpu_struct + PVCS_r11)
-
-	/* Copy the IRET frame to the PVM CPU structure. */
-	movq	1*8(%rsp), %rcx		/* RIP */
-	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rip)
-	movq	3*8(%rsp), %rcx		/* RFLAGS */
-	movl	%ecx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_eflags)
-	movq	4*8(%rsp), %rcx		/* RSP */
-	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rsp)
-
-	addq	$6*8, %rsp
+	addq	$(6*8+16), %rsp
 SYM_INNER_LABEL(pvm_rets_rip, SYM_L_GLOBAL)
 	ANNOTATE_NOENDBR
 	syscall
 SYM_CODE_END(pvm_kernel_event_entry)
+
+.pushsection .head.text, "ax"
+SYM_CODE_START_NOALIGN(pvm_early_kernel_event_entry)
+	UNWIND_HINT_ENTRY
+	ENDBR
+
+	incl	early_recursion_flag(%rip)
+	PUSH_IRET_FRAME_FROM_PVCS user=0
+	PUSH_REGS_AND_HANDLE_EVENT handler=pvm_early_event
+	POP_REGS_AND_LOAD_IRET_FRAME_INTO_PVCS
+	decl	early_recursion_flag(%rip)
+	addq	$6*8, %rsp
+	jmp	pvm_rets_rip
+SYM_CODE_END(pvm_early_kernel_event_entry)
+.popsection

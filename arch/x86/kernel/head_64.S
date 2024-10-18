@@ -633,37 +633,6 @@ SYM_CODE_START_NOALIGN(vc_no_ghcb)
 SYM_CODE_END(vc_no_ghcb)
 #endif
 
-#ifdef CONFIG_PVM_GUEST
-#include <asm/pvm_para.h>
-
-	.align 256
-SYM_CODE_START_NOALIGN(pvm_early_kernel_event_entry)
-	UNWIND_HINT_ENTRY
-	ENDBR
-
-	incl	early_recursion_flag(%rip)
-
-	pushq	$__KERNEL_DS
-	pushq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_rsp) /* pt_regs->sp */
-	movl	PER_CPU_VAR(pvm_vcpu_struct + PVCS_eflags), %ecx
-	pushq	%rcx					/* pt_regs->flags */
-	pushq	$__KERNEL_CS
-	pushq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_rip) /* pt_regs->ip */
-	movq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_rcx), %rcx
-	movq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_r11), %r11
-	pushq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_errcode)
-
-	orq	$PVM_EVENT_FLAGS_EF, PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_flags)
-
-	PUSH_AND_CLEAR_REGS
-	movq	%rsp, %rdi	/* %rdi -> pt_regs */
-	call	pvm_early_event
-
-	decl	early_recursion_flag(%rip)
-	jmp	pvm_restore_regs_and_return_to_kernel
-SYM_CODE_END(pvm_early_kernel_event_entry)
-#endif
-
 #define SYM_DATA_START_PAGE_ALIGNED(name)			\
 	SYM_START(name, SYM_L_GLOBAL, .balign PAGE_SIZE)
 

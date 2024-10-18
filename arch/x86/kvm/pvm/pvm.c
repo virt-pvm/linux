@@ -274,6 +274,7 @@ static bool try_to_convert_to_pvm_mode(struct kvm_vcpu *vcpu)
 
 	pvm->non_pvm_mode = false;
 	pvm->int_shadow = 0;
+	pvm->nmi_mask = 0;
 
 	return true;
 }
@@ -1234,6 +1235,7 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		 * request serving.
 		 */
 		pvm->msr_vcpu_struct = data;
+		kvm_make_request(KVM_REQ_EVENT, vcpu);
 		if (!data) {
 			pvm->switch_flags |= SWITCH_FLAGS_PVCS_INVALID;
 			kvm_gpc_deactivate(&pvm->pvcs_gpc);
@@ -1568,9 +1570,7 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 	struct pvm_vcpu_struct *pvcs;
 
 	pvcs = pvm_get_vcpu_struct(pvm);
-	if (!pvcs || (!user && !(pvcs->event_flags & PVM_EVENT_FLAGS_EF))) {
-		if (pvcs)
-			pvm_put_vcpu_struct(pvm, false);
+	if (!pvcs) {
 		kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
 		return 1;
 	}
@@ -1580,7 +1580,36 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 		pvcs->user_ss = pvm->hw_ss;
 		pvcs->pkru = 0;
 		pvcs->user_gsbase = pvm_read_guest_gs_base(pvm);
+	} else if (unlikely(pvcs->event_vector & 0xFF00)) {
+		/*
+		 * When the guest is busy on handling events, no nested
+		 * events are allowed except for the async exceptions.
+		 *
+		 * Set PVM_PVCS_EVENT_VECTOR_NMI or PVM_PVCS_EVENT_VECTOR_MCE
+		 * correspondingly.
+		 *
+		 * The guest should check async exceptions when it clears any
+		 * PVM_PVCS_EVENT_VECTOR_* bits.  The hypervisor should check
+		 * async exceptions when handling ERETU/ERETS.
+		 */
+		if (vector == NMI_VECTOR)
+			pvcs->event_vector |= PVM_PVCS_EVENT_VECTOR_NMI;
+		else if (vector == MC_VECTOR)
+			pvcs->event_vector |= PVM_PVCS_EVENT_VECTOR_MCE;
+		else
+			kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+
+		/*
+		 * Set SWITCH_FLAGS_IRQ_WIN to stop the guest to directly
+		 * switch to the user mode.
+		 */
+		to_pvm(vcpu)->switch_flags |= SWITCH_FLAGS_IRQ_WIN;
+
+		pvm_put_vcpu_struct(pvm, true);
+
+		return 1;
 	}
+
 	pvcs->eflags = kvm_get_rflags(vcpu);
 	pvcs->rip = kvm_rip_read(vcpu);
 	pvcs->rsp = rsp;
@@ -1590,17 +1619,16 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 	if (has_err_code)
 		pvcs->event_errcode = err_code;
 
-	/* PVM Spec: don't update pvcs->event_vector when syscall */
-	if (vector != PVM_SYSCALL_VECTOR)
-		pvcs->event_vector = vector;
+	if (vector == NMI_VECTOR)
+		pvcs->event_vector = PVM_PVCS_EVENT_VECTOR_NMI;
+	else if (vector == MC_VECTOR)
+		pvcs->event_vector = PVM_PVCS_EVENT_VECTOR_MCE;
+	else if (vector != PVM_SYSCALL_VECTOR)
+		pvcs->event_vector = PVM_PVCS_EVENT_VECTOR_STD | vector;
 
 	if (vector == PF_VECTOR)
 		pvcs->cr2 = vcpu->arch.cr2;
 
-	pvm->nmi_mask = true;
-	pvcs->event_flags &= ~(PVM_EVENT_FLAGS_EF | PVM_EVENT_FLAGS_EP | PVM_EVENT_FLAGS_IF);
-	if (vector >= 32)
-		pvcs->event_flags &= ~PVM_EVENT_FLAGS_IP;
 	pvm_put_vcpu_struct(pvm, true);
 
 	if (user)
@@ -1618,10 +1646,9 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 	// Change rip, rflags, rcx and r11 per PVM event delivery specification,
 	// this allows to use sysret in VM enter.
 	kvm_rip_write(vcpu, entry);
-	pvm->rflags = X86_EFLAGS_FIXED;
 	kvm_rcx_write(vcpu, entry);
+	kvm_set_rflags(vcpu, X86_EFLAGS_FIXED);
 	kvm_r11_write(vcpu, X86_EFLAGS_IF | X86_EFLAGS_FIXED);
-	kvm_make_request(KVM_REQ_EVENT, vcpu);
 
 	return 1;
 }
@@ -1657,6 +1684,9 @@ static void pvm_set_rflags(struct kvm_vcpu *vcpu, unsigned long rflags)
 
 	pvm->rflags = rflags;
 
+	if (rflags & X86_EFLAGS_IF)
+		pvm->switch_flags &= ~SWITCH_FLAGS_IRQ_WIN;
+
 	/*
 	 * The IF bit of 'pvcs->event_flags' should not be changed in user
 	 * mode. It is recommended for this bit to be cleared when switching to
@@ -1666,12 +1696,10 @@ static void pvm_set_rflags(struct kvm_vcpu *vcpu, unsigned long rflags)
 	if (unlikely(pvm->non_pvm_mode) || !need_update || !is_smod(pvm))
 		return;
 
-	if (rflags & X86_EFLAGS_IF) {
-		pvm->switch_flags &= ~SWITCH_FLAGS_IRQ_WIN;
+	if (rflags & X86_EFLAGS_IF)
 		pvm_event_flags_update(vcpu, PVM_EVENT_FLAGS_IF, PVM_EVENT_FLAGS_IP);
-	} else {
+	else
 		pvm_event_flags_update(vcpu, 0, PVM_EVENT_FLAGS_IF);
-	}
 }
 
 static bool pvm_get_if_flag(struct kvm_vcpu *vcpu)
@@ -1706,7 +1734,9 @@ static int pvm_interrupt_allowed(struct kvm_vcpu *vcpu, bool for_injection)
 
 static bool pvm_get_nmi_mask(struct kvm_vcpu *vcpu)
 {
-	return to_pvm(vcpu)->nmi_mask;
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	return pvm->non_pvm_mode ? pvm->nmi_mask : !pvm->msr_vcpu_struct;
 }
 
 static void pvm_set_nmi_mask(struct kvm_vcpu *vcpu, bool masked)
@@ -1716,8 +1746,11 @@ static void pvm_set_nmi_mask(struct kvm_vcpu *vcpu, bool masked)
 
 static void enable_nmi_window(struct kvm_vcpu *vcpu)
 {
-	to_pvm(vcpu)->switch_flags |= SWITCH_FLAGS_NMI_WIN;
-	pvm_event_flags_update(vcpu, PVM_EVENT_FLAGS_EP, 0);
+	// Nothing to do.
+	// When it is non pvm mode, the VCPU is being emulated.
+	// When pvm->msr_vcpu_struct is set, NMI is always enabled.
+	// When pvm->msr_vcpu_struct is not set, NMI is disabled but the
+	// code to set it will also check the pending events including NMI.
 }
 
 static int pvm_nmi_allowed(struct kvm_vcpu *vcpu, bool for_injection)
@@ -1745,8 +1778,6 @@ static void pvm_inject_irq(struct kvm_vcpu *vcpu, bool reinjected)
 
 	trace_kvm_inj_virq(irq, vcpu->arch.interrupt.soft, false);
 
-	to_pvm(vcpu)->switch_flags &= ~SWITCH_FLAGS_IRQ_WIN;
-
 	if (do_pvm_event(vcpu, irq, false, 0))
 		kvm_clear_interrupt_queue(vcpu);
 
@@ -1756,7 +1787,6 @@ static void pvm_inject_irq(struct kvm_vcpu *vcpu, bool reinjected)
 /* Always inject the NMI directly and consume the event. */
 static void pvm_inject_nmi(struct kvm_vcpu *vcpu)
 {
-	to_pvm(vcpu)->switch_flags &= ~SWITCH_FLAGS_NMI_WIN;
 	if (do_pvm_event(vcpu, NMI_VECTOR, false, 0))
 		vcpu->arch.nmi_injected = false;
 
@@ -1779,6 +1809,8 @@ static int handle_synthetic_instruction_return(struct kvm_vcpu *vcpu, bool user)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 	struct pvm_vcpu_struct *pvcs;
+	unsigned long rflags;
+	u32 pending_async_exceptions;
 
 	/* switch to user mode before rsp changed. */
 	if (user)
@@ -1790,47 +1822,45 @@ static int handle_synthetic_instruction_return(struct kvm_vcpu *vcpu, bool user)
 		return 1;
 	}
 
+	pending_async_exceptions = pvcs->event_vector;
+	if (user)
+		pvcs->event_vector = PVM_PVCS_EVENT_VECTOR_STD;
+	else
+		pvcs->event_vector = 0;
+
 	kvm_rip_write(vcpu, pvcs->rip);
 	kvm_rsp_write(vcpu, pvcs->rsp);
 	kvm_rcx_write(vcpu, pvcs->rcx);
 	kvm_r11_write(vcpu, pvcs->r11);
-	pvm->rflags = pvcs->eflags;
+	rflags = pvcs->eflags;
 
 	if (user) {
 		pvm->hw_cs = pvcs->user_cs | USER_RPL;
 		pvm->hw_ss = pvcs->user_ss | USER_RPL;
 		pvm_write_guest_gs_base(pvm, pvcs->user_gsbase);
-		pvm->rflags |= X86_EFLAGS_IF;
 	}
 
-	pvm_set_nmi_mask(vcpu, false);
-	kvm_make_request(KVM_REQ_EVENT, vcpu);
-	if (!user)
-		pvcs->event_flags |= PVM_EVENT_FLAGS_EF;
-	pvcs->event_flags &= ~PVM_EVENT_FLAGS_EP;
-	pvm->switch_flags &= ~SWITCH_FLAGS_NMI_WIN;
-	if (pvm_get_if_flag(vcpu)) {
-		if (!user)
-			pvcs->event_flags |= PVM_EVENT_FLAGS_IF;
-		pvcs->event_flags &= ~PVM_EVENT_FLAGS_IP;
-		pvm->switch_flags &= ~SWITCH_FLAGS_IRQ_WIN;
-	}
 	pvm_put_vcpu_struct(pvm, true);
+
+	// Don't call kvm_set_rflags() with pvm_get_vcpu_struct() held
+	// which might be nesting the lock in pvm_set_rflags().
+	// Avoid using bare code to set pvm->rflags, kvm_set_rflags() can
+	// handle guest debug, pvcs->event_flags, pvm->switch_flags.
+	kvm_set_rflags(vcpu, rflags);
+
+	if (pending_async_exceptions & PVM_PVCS_EVENT_VECTOR_MCE)
+		__do_pvm_event(vcpu, user, MC_VECTOR, false, 0);
+	if (pending_async_exceptions & PVM_PVCS_EVENT_VECTOR_NMI)
+		__do_pvm_event(vcpu, user, NMI_VECTOR, false, 0);
 
 	return 1;
 }
 
-static int handle_hc_event_window(struct kvm_vcpu *vcpu)
+static int handle_hc_irq_window(struct kvm_vcpu *vcpu)
 {
 	kvm_make_request(KVM_REQ_EVENT, vcpu);
-
-	if (pvm_get_if_flag(vcpu)) {
-		to_pvm(vcpu)->switch_flags &= ~(SWITCH_FLAGS_IRQ_WIN | SWITCH_FLAGS_NMI_WIN);
-		pvm_event_flags_update(vcpu, 0, PVM_EVENT_FLAGS_IP | PVM_EVENT_FLAGS_EP);
-	} else {
-		to_pvm(vcpu)->switch_flags &= ~SWITCH_FLAGS_NMI_WIN;
-		pvm_event_flags_update(vcpu, 0, PVM_EVENT_FLAGS_EP);
-	}
+	to_pvm(vcpu)->switch_flags &= ~SWITCH_FLAGS_IRQ_WIN;
+	pvm_event_flags_update(vcpu, 0, PVM_EVENT_FLAGS_IP);
 
 	++vcpu->stat.irq_window_exits;
 	return 1;
@@ -2111,8 +2141,8 @@ static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 
 	// handle hypercall, check it for pvm hypercall and then kvm hypercall
 	switch (kvm_rax_read(vcpu)) {
-	case PVM_HC_EVENT_WIN:
-		return handle_hc_event_window(vcpu);
+	case PVM_HC_IRQ_WIN:
+		return handle_hc_irq_window(vcpu);
 	case PVM_HC_IRQ_HALT:
 		return handle_hc_irq_halt(vcpu);
 	case PVM_HC_LOAD_PGTBL:
@@ -2761,10 +2791,8 @@ static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu)
 		 * directly without triggering a VM exit.
 		 */
 		pvm->rflags &= ~X86_EFLAGS_IF;
-		if (likely(pvm->msr_vcpu_struct)) {
-			pvm_set_nmi_mask(vcpu, !(pvcs->event_flags & PVM_EVENT_FLAGS_EF));
+		if (likely(pvm->msr_vcpu_struct))
 			pvm->rflags |= X86_EFLAGS_IF & pvcs->event_flags;
-		}
 
 		if (pvm->hw_cs != __USER_CS || pvm->hw_ss != __USER_DS)
 			kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);

@@ -80,6 +80,7 @@ int main(void)
 #define ENTRY(entry) OFFSET(PVCS_ ## entry, pvm_vcpu_struct, entry)
 	ENTRY(event_flags);
 	ENTRY(event_errcode);
+	ENTRY(event_vector);
 	ENTRY(user_cs);
 	ENTRY(user_ss);
 	ENTRY(user_gsbase);
