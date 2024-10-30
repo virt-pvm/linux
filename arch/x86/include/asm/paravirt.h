@@ -387,6 +387,11 @@ static inline void paravirt_release_p4d(unsigned long pfn)
 	PVOP_VCALL1(mmu.release_p4d, pfn);
 }
 
+static inline void pte_update(pte_t *ptep, pte_t old_pte)
+{
+	PVOP_VCALL2(mmu.pte_update, ptep, old_pte.pte);
+}
+
 static inline pte_t __pte(pteval_t val)
 {
 	return (pte_t) { PVOP_ALT_CALLEE1(pteval_t, mmu.make_pte, val,

@@ -2163,6 +2163,7 @@ static const typeof(pv_ops) xen_mmu_ops __initconst = {
 
 		.set_pte = xen_set_pte_init,
 		.set_pmd = xen_set_pmd_hyper,
+		.pte_update = paravirt_nop,
 
 		.ptep_modify_prot_start = xen_ptep_modify_prot_start,
 		.ptep_modify_prot_commit = xen_ptep_modify_prot_commit,

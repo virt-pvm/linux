@@ -384,6 +384,7 @@ static void cpa_flush_all(unsigned long cache)
 {
 	BUG_ON(irqs_disabled() && !early_boot_irqs_disabled);
 
+	pvm_mmu_flush_pteps();
 	on_each_cpu(__cpa_flush_all, (void *) cache, 1);
 }
 
@@ -408,7 +409,8 @@ static void cpa_flush(struct cpa_data *data, int cache)
 		return;
 	}
 
-	if (cpa->force_flush_all || cpa->numpages > tlb_single_page_flush_ceiling)
+	if (static_cpu_has(X86_FEATURE_KVM_PVM_GUEST) ||
+	    cpa->force_flush_all || cpa->numpages > tlb_single_page_flush_ceiling)
 		flush_tlb_all();
 	else
 		on_each_cpu(__cpa_flush_tlb, cpa, 1);

@@ -10,6 +10,7 @@ typedef void (*idtentry_t)(struct pt_regs *regs);
 
 #ifdef CONFIG_PVM_GUEST
 #include <asm/irqflags.h>
+#include <asm/cpufeature.h>
 #include <uapi/asm/kvm_para.h>
 
 void __init pvm_early_setup(void);
@@ -18,6 +19,14 @@ void __init pvm_install_sysvec(unsigned int sysvec, idtentry_t handler);
 void __init pvm_switch_pvcs(int cpu);
 void pvm_setup_event_handling(void);
 bool __init pvm_kernel_layout_relocate(void);
+
+void pvm_mmu_do_flush_pteps(unsigned long flush_flags);
+
+static __always_inline void pvm_mmu_flush_pteps(void)
+{
+	if (static_cpu_has(X86_FEATURE_KVM_PVM_GUEST))
+		pvm_mmu_do_flush_pteps(0);
+}
 
 static inline void pvm_cpuid(unsigned int *eax, unsigned int *ebx,
 			     unsigned int *ecx, unsigned int *edx)
@@ -92,6 +101,10 @@ static inline void pvm_setup_event_handling(void)
 static inline bool pvm_kernel_layout_relocate(void)
 {
 	return false;
+}
+
+static inline void pvm_mmu_flush_pteps(void)
+{
 }
 #endif /* CONFIG_PVM_GUEST */
 

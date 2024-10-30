@@ -1050,6 +1050,7 @@ static void do_flush_tlb_all(void *info)
 void flush_tlb_all(void)
 {
 	count_vm_tlb_event(NR_TLB_REMOTE_FLUSH);
+	pvm_mmu_flush_pteps();
 	on_each_cpu(do_flush_tlb_all, NULL, 1);
 }
 
@@ -1065,6 +1066,8 @@ static void do_kernel_range_flush(void *info)
 
 void flush_tlb_kernel_range(unsigned long start, unsigned long end)
 {
+	pvm_mmu_flush_pteps();
+
 	/* Balance as user space task's flush, a bit conservative */
 	if (end == TLB_FLUSH_ALL ||
 	    (end - start) > tlb_single_page_flush_ceiling << PAGE_SHIFT) {
@@ -1251,6 +1254,14 @@ void arch_tlbbatch_flush(struct arch_tlbflush_unmap_batch *batch)
 	struct flush_tlb_info *info;
 
 	int cpu = get_cpu();
+
+	/*
+	 * The modified ptes had been commited in arch_tlbbatch_add_pending()
+	 * due to bumping the generation, so there should be no need to commit
+	 * again.
+	 *
+	 * pvm_mmu_flush_pteps();
+	 */
 
 	info = get_flush_tlb_info(NULL, 0, TLB_FLUSH_ALL, 0, false,
 				  TLB_GENERATION_INVALID);

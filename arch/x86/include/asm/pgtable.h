@@ -97,6 +97,17 @@ extern pmdval_t early_pmd_flags;
 #define pte_clear(mm, addr, ptep)	native_pte_clear(mm, addr, ptep)
 #define pmd_clear(pmd)			native_pmd_clear(pmd)
 
+/*
+ * Rules for using pte_update - it must be called after any PTE update which
+ * has not been done using the set_pte / clear_pte interfaces.  It is used by
+ * shadow mode hypervisors to resynchronize the shadow page tables.  Kernel PTE
+ * updates should either be sets, clears, or set_pte_atomic for P->P
+ * transitions, which means this hook should only be called for user PTEs.
+ * This hook implies a P->P protection or access change has taken place, which
+ * requires a subsequent TLB flush.
+ */
+#define pte_update(ptep, old_pte)	do {} while (0)
+
 #define pgd_val(x)	native_pgd_val(x)
 #define __pgd(x)	native_make_pgd(x)
 
@@ -1283,6 +1294,7 @@ static inline pte_t ptep_get_and_clear(struct mm_struct *mm, unsigned long addr,
 {
 	pte_t pte = native_ptep_get_and_clear(ptep);
 	page_table_check_pte_clear(mm, pte);
+	pte_update(ptep, pte);
 	return pte;
 }
 
@@ -1320,6 +1332,7 @@ static inline void ptep_set_wrprotect(struct mm_struct *mm,
 	do {
 		new_pte = pte_wrprotect(old_pte);
 	} while (!try_cmpxchg((long *)&ptep->pte, (long *)&old_pte, *(long *)&new_pte));
+	pte_update(ptep, old_pte);
 }
 
 #define flush_tlb_fix_spurious_fault(vma, address, ptep) do { } while (0)

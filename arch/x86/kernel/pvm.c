@@ -12,16 +12,28 @@
 
 #include <linux/mm_types.h>
 #include <linux/nospec.h>
+#include <linux/kvm_para.h>
 
 #include <asm/cpufeature.h>
 #include <asm/cpu_entry_area.h>
 #include <asm/desc.h>
+#include <asm/kvm_para.h>
 #include <asm/pvm_para.h>
 #include <asm/setup.h>
 #include <asm/traps.h>
 
 DEFINE_PER_CPU_PAGE_ALIGNED(struct pvm_vcpu_struct, pvm_vcpu_struct);
 static DEFINE_PER_CPU(unsigned long, pvm_guest_cr3);
+
+#define MMU_PTEPS_BUFFER_LEN	(PAGE_SIZE / sizeof(u64))
+
+struct pvm_mmu_pteps_buffer {
+	u64 pteps[MMU_PTEPS_BUFFER_LEN];
+};
+
+static DEFINE_PER_CPU_PAGE_ALIGNED(struct pvm_mmu_pteps_buffer, pteps_buffer);
+static DEFINE_PER_CPU(unsigned int, pteps_buffer_len);
+static bool pv_mmu_enabled;
 
 unsigned long pvm_range_start __initdata;
 unsigned long pvm_range_end __initdata;
@@ -184,22 +196,182 @@ static void pvm_write_cr3(unsigned long val)
 	if (pgtable_l5_enabled())
 		flags |= PVM_LOAD_PGTBL_FLAGS_LA57;
 	this_cpu_write(pvm_guest_cr3, pgd);
+	if (!(val & X86_CR3_PCID_NOFLUSH))
+		pvm_mmu_do_flush_pteps(0);
 	pvm_hypercall3(PVM_HC_LOAD_PGTBL, flags, pgd, pvm_user_pgd(pgd));
 }
 
 static void pvm_flush_tlb_user(void)
 {
-	pvm_hypercall0(PVM_HC_TLB_FLUSH_CURRENT);
+	if (this_cpu_read(pteps_buffer_len))
+		pvm_mmu_do_flush_pteps(KVM_PV_MMU_TLB_FLUSH_CURRENT);
+	else
+		pvm_hypercall0(PVM_HC_TLB_FLUSH_CURRENT);
 }
 
 static void pvm_flush_tlb_kernel(void)
 {
-	pvm_hypercall0(PVM_HC_TLB_FLUSH);
+	if (this_cpu_read(pteps_buffer_len))
+		pvm_mmu_do_flush_pteps(KVM_PV_MMU_TLB_FLUSH);
+	else
+		pvm_hypercall0(PVM_HC_TLB_FLUSH);
 }
 
 static void pvm_flush_tlb_one_user(unsigned long addr)
 {
-	pvm_hypercall1(PVM_HC_TLB_INVLPG, addr);
+	if (this_cpu_read(pteps_buffer_len))
+		pvm_mmu_do_flush_pteps(addr | KVM_PV_MMU_INVLPG);
+	else
+		pvm_hypercall1(PVM_HC_TLB_INVLPG, addr);
+}
+
+static void pvm_release_pt(unsigned long pfn)
+{
+	pvm_hypercall1(KVM_HC_PV_MMU_RELEASE_PT, pfn);
+}
+
+static void flush_pteps(struct pvm_mmu_pteps_buffer *buf, unsigned long flags)
+{
+	int copyed, offset = 0;
+	unsigned int len = this_cpu_read(pteps_buffer_len);
+
+	while (len) {
+		copyed = pvm_hypercall3(KVM_HC_PV_MMU_SET_PTES, offset, len, flags);
+		len -= copyed;
+		offset += copyed;
+	}
+
+	this_cpu_write(pteps_buffer_len, 0);
+}
+
+#define PVM_PTE_IGNORE_MASK1		GENMASK(11, 9)
+#define PVM_PTE_IGNORE_MASK2		GENMASK(58, 52)
+#define PVM_PTE_CHG_IGNORE_MASK		(_PAGE_PRESENT | _PAGE_RW | _PAGE_ACCESSED | _PAGE_DIRTY |\
+					 PVM_PTE_IGNORE_MASK1 | PVM_PTE_IGNORE_MASK2)
+
+static unsigned int pte_change_to_flush_flags(pte_t pte, pte_t old_pte)
+{
+	unsigned int flags = 0;
+
+	/* !PRESENT - > *; no need for flush */
+	if (pte_present(old_pte)) {
+		if (!pte_present(pte) ||
+		    (pte_young(old_pte) && !pte_young(pte)) ||
+		    ((old_pte.pte ^ pte.pte) & ~PVM_PTE_CHG_IGNORE_MASK))
+			flags |= KVM_PV_MMU_PTE_NP;
+		else if ((pte_write(old_pte) && !pte_write(pte)) ||
+			 (pte_dirty(old_pte) && !pte_dirty(pte)))
+				flags |= KVM_PV_MMU_PTE_RO;
+	}
+
+	return flags;
+}
+
+void pvm_mmu_do_flush_pteps(unsigned long flush_flags)
+{
+	struct pvm_mmu_pteps_buffer *buf;
+	unsigned long flags;
+
+	local_irq_save(flags);
+
+	buf = this_cpu_ptr(&pteps_buffer);
+	flush_pteps(buf, flush_flags);
+
+	local_irq_restore(flags);
+}
+
+static void pvm_mmu_add_ptep(pte_t *ptep, unsigned int flags)
+{
+	struct pvm_mmu_pteps_buffer *buf;
+	unsigned long eflags;
+	unsigned int len;
+
+	local_irq_save(eflags);
+
+	buf = this_cpu_ptr(&pteps_buffer);
+	len = this_cpu_read(pteps_buffer_len);
+	if (len == MMU_PTEPS_BUFFER_LEN) {
+		flush_pteps(buf, 0);
+		len = 0;
+	}
+	buf->pteps[len] = (u64)__pa(ptep) | flags;
+	this_cpu_inc(pteps_buffer_len);
+
+	local_irq_restore(eflags);
+}
+
+static void pvm_set_pte(pte_t *ptep, pte_t pte)
+{
+	unsigned int flags = pte_change_to_flush_flags(pte, *ptep);
+
+	native_set_pte(ptep, pte);
+	if (flags)
+		pvm_mmu_add_ptep(ptep, flags);
+}
+
+static void pvm_pte_update(pte_t *ptep, pte_t old_pte)
+{
+	unsigned int flags = pte_change_to_flush_flags(*ptep, old_pte);
+
+	if (flags)
+		pvm_mmu_add_ptep(ptep, flags);
+}
+
+static void pvm_start_context_switch(struct task_struct *prev)
+{
+	BUG_ON(preemptible());
+
+	pvm_mmu_do_flush_pteps(0);
+}
+
+static void pvm_setup_pv_mmu(void)
+{
+	int cpu = raw_smp_processor_id();
+	u64 xpa = slow_virt_to_phys(this_cpu_ptr(&pteps_buffer.pteps[0]));
+
+	if (!pv_mmu_enabled)
+		return;
+
+	/*
+	 * For the boot CPU (CPU 0), it may be set up multiple times. For
+	 * example, the first time to register with the memory in the kernel
+	 * image, and the second time to register with the memory of the
+	 * PERCPU area. However, all the content should be copied to PERCPU
+	 * area. For safety, commit cached gpteps first.
+	 */
+	if (!cpu)
+		pvm_mmu_do_flush_pteps(0);
+
+	wrmsrl(MSR_KVM_PV_MMU_BUFFER, xpa | KVM_MSR_ENABLED);
+}
+
+static int __init pvm_early_setup_pv_mmu(void)
+{
+	/*
+	 * Can't use slow_virt_to_phys() here, because early_top_pgt is in
+	 * use and init_top_pgt is empty now.
+	 */
+	u64 xpa = __pa(this_cpu_ptr(&pteps_buffer.pteps[0]));
+
+	if (kvm_para_has_feature(KVM_FEATURE_PV_MMU))
+		return wrmsrl_safe(MSR_KVM_PV_MMU_BUFFER, xpa | KVM_MSR_ENABLED);
+
+	return -ENOSYS;
+}
+
+static void __init pvm_pv_mmu_ops_init(void)
+{
+	int r;
+
+	r = pvm_early_setup_pv_mmu();
+	if (r < 0)
+		return;
+
+	pv_ops.mmu.release_pte = pvm_release_pt;
+	pv_ops.mmu.set_pte = pvm_set_pte;
+	pv_ops.mmu.pte_update = pvm_pte_update;
+	pv_ops.cpu.start_context_switch = pvm_start_context_switch;
+	pv_mmu_enabled = true;
 }
 
 void __init pvm_early_event(struct pt_regs *regs)
@@ -452,6 +624,7 @@ void __init pvm_early_setup(void)
 
 	setup_force_cpu_cap(X86_FEATURE_KVM_PVM_GUEST);
 	setup_force_cpu_cap(X86_FEATURE_PV_GUEST);
+	setup_force_cpu_cap(X86_FEATURE_HYPERVISOR);
 
 	/* Don't use SYSENTER (Intel) and SYSCALL32 (AMD) in vdso. */
 	setup_clear_cpu_cap(X86_FEATURE_SYSENTER32);
@@ -480,6 +653,7 @@ void __init pvm_early_setup(void)
 	pv_ops.mmu.flush_tlb_user = pvm_flush_tlb_user;
 	pv_ops.mmu.flush_tlb_kernel = pvm_flush_tlb_kernel;
 	pv_ops.mmu.flush_tlb_one_user = pvm_flush_tlb_one_user;
+	pvm_pv_mmu_ops_init();
 
 	this_cpu_write(pvm_vcpu_struct.event_flags, PVM_EVENT_FLAGS_EF);
 	wrmsrl(MSR_PVM_VCPU_STRUCT, __pa(this_cpu_ptr(&pvm_vcpu_struct)));
@@ -500,6 +674,8 @@ void __init pvm_switch_pvcs(int cpu)
 		u64 xpa = slow_virt_to_phys(this_cpu_ptr(&pvm_vcpu_struct));
 
 		wrmsrl(MSR_PVM_VCPU_STRUCT, xpa);
+
+		pvm_setup_pv_mmu();
 	}
 }
 
@@ -513,6 +689,8 @@ void pvm_setup_event_handling(void)
 		wrmsrl(MSR_PVM_EVENT_ENTRY, (unsigned long)(void *)pvm_user_event_entry);
 		wrmsrl(MSR_PVM_RETU_RIP, (unsigned long)(void *)pvm_retu_rip);
 		wrmsrl(MSR_PVM_RETS_RIP, (unsigned long)(void *)pvm_rets_rip);
+
+		pvm_setup_pv_mmu();
 
 		/*
 		 * PVM spec requires the hypervisor-maintained

@@ -14,6 +14,7 @@
 #include <asm/pti.h>
 #include <asm/processor-flags.h>
 #include <asm/pgtable.h>
+#include <asm/pvm_para.h>
 
 DECLARE_PER_CPU(u64, tlbstate_untag_mask);
 
@@ -268,6 +269,16 @@ static inline bool arch_tlbbatch_should_defer(struct mm_struct *mm)
 
 static inline u64 inc_mm_tlb_gen(struct mm_struct *mm)
 {
+	/*
+	 * FIXME:
+	 * Commit the cached ptes before bumping the generation; otherwise,
+	 * another CPU that sees the updated generation won't see the
+	 * modified ptes since it doesn't have them in its buffer.
+	 * However, this could lead to too many hypercalls if this CPU skips
+	 * TLB flushing later if the target mm is not loaded on any CPUs.
+	 * A global buffer is needed for such case.
+	 */
+	pvm_mmu_flush_pteps();
 	/*
 	 * Bump the generation count.  This also serves as a full barrier
 	 * that synchronizes with switch_mm(): callers are required to order
