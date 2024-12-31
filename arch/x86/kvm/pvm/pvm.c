@@ -2406,6 +2406,34 @@ static u32 pvm_get_syscall_exit_reason(struct kvm_vcpu *vcpu)
 	return PVM_EXIT_REASONS_SYSCALL;
 }
 
+static u64 pvm_get_hypercall_exit_reason(struct kvm_vcpu *vcpu)
+{
+	switch (kvm_rax_read(vcpu)) {
+	case PVM_HC_IRQ_WIN:
+		return PVM_EXIT_REASONS_HC_IRQ_WIN;
+	case PVM_HC_IRQ_HALT:
+		return PVM_EXIT_REASONS_HC_IRQ_HALT;
+	case PVM_HC_LOAD_PGTBL:
+		return PVM_EXIT_REASONS_HC_LOAD_PGTBL;
+	case PVM_HC_TLB_FLUSH:
+		return PVM_EXIT_REASONS_HC_TLB_FLUSH;
+	case PVM_HC_TLB_FLUSH_CURRENT:
+		return PVM_EXIT_REASONS_HC_TLB_FLUSH_CURRENT;
+	case PVM_HC_TLB_INVLPG:
+		return PVM_EXIT_REASONS_HC_TLB_INVLPG;
+	case PVM_HC_LOAD_GS:
+		return PVM_EXIT_REASONS_HC_LOAD_GS;
+	case PVM_HC_RDMSR:
+		return PVM_EXIT_REASONS_HC_RDMSR;
+	case PVM_HC_WRMSR:
+		return PVM_EXIT_REASONS_HC_WRMSR;
+	case PVM_HC_LOAD_TLS:
+		return PVM_EXIT_REASONS_HC_LOAD_TLS;
+	default:
+		return 0;
+	}
+}
+
 static void pvm_get_exit_info(struct kvm_vcpu *vcpu, u32 *reason, u64 *info1, u64 *info2,
 			      u32 *intr_info, u32 *error_code)
 {
@@ -2418,12 +2446,17 @@ static void pvm_get_exit_info(struct kvm_vcpu *vcpu, u32 *reason, u64 *info1, u6
 	else if (pvm->exit_vector >= FIRST_EXTERNAL_VECTOR &&
 		 pvm->exit_vector < NR_VECTORS)
 		*reason = PVM_EXIT_REASONS_INTERRUPT;
+	else if (pvm->exit_vector == SWITCH_EXIT_REASONS_FAILED_VMETNRY)
+		*reason = PVM_FAILED_VMENTRY_VECTOR;
 	else
 		*reason = pvm->exit_vector;
 	*info1 = pvm->exit_vector;
 	*info2 = pvm->exit_error_code;
 	*intr_info = pvm->exit_vector;
 	*error_code = pvm->exit_error_code;
+
+	if (*reason == PVM_EXIT_REASONS_HYPERCALL)
+		*info2 = pvm_get_hypercall_exit_reason(vcpu);
 }
 
 static void pvm_handle_exit_irqoff(struct kvm_vcpu *vcpu)
