@@ -33,6 +33,9 @@ MODULE_LICENSE("GPL");
 static bool __read_mostly enable_cpuid_intercept = 0;
 module_param_named(cpuid_intercept, enable_cpuid_intercept, bool, 0444);
 
+static bool __read_mostly enable_pgtbl_preload = 0;
+module_param_named(pgtbl_preload, enable_pgtbl_preload, bool, 0444);
+
 static bool __read_mostly is_intel;
 
 static unsigned long host_idt_base;
@@ -593,6 +596,22 @@ static int host_pcid_free_uncached(struct vcpu_pvm *pvm)
 	return -1;
 }
 
+static int host_pcid_find(struct vcpu_pvm *pvm, u64 root_hpa)
+{
+	struct host_pcid_state *tlb_state = this_cpu_ptr(&pvm_tlb_state);
+	int i;
+
+	/* find if it is allocated. */
+	for (i = 0; i < NUM_HOST_PCID_FOR_GUEST; i++) {
+		struct host_pcid_one *tlb = &tlb_state->pairs[i];
+
+		if (tlb->root_hpa == root_hpa && tlb->pvm == pvm)
+			return index_to_host_pcid(i);
+	}
+
+	return 0;
+}
+
 /*
  * Get a host pcid of the current pCPU for the specific guest pgd.
  * PVM vTLB is guest pgd tagged.
@@ -745,6 +764,27 @@ static bool check_switch_cr3(struct vcpu_pvm *pvm, u64 switch_host_cr3)
 	return true;
 }
 
+static void pvm_pgtbl_preload_for_guest_with_host_pcid(struct vcpu_pvm *pvm, u64 *switch_host_cr3)
+{
+	u32 host_pcid;
+	u64 hw_cr3;
+	u64 prev_root_hpa = pvm->vcpu.arch.mmu->prev_roots[0].hpa;
+
+	if (enable_pgtbl_preload &&
+		VALID_PAGE(prev_root_hpa) &&
+		pvm->vcpu.arch.mmu->prev_roots[0].pgd == pvm->msr_switch_cr3 &&
+		*switch_host_cr3 != pvm->msr_switch_cr3) {
+		host_pcid = host_pcid_find(pvm, prev_root_hpa);
+		if (host_pcid) {
+			hw_cr3 = prev_root_hpa | host_pcid;
+			this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, hw_cr3 | CR3_NOFLUSH);
+			*switch_host_cr3 = hw_cr3 | CR3_NOFLUSH;
+		}
+	}
+
+	return;
+}
+
 static void pvm_set_host_cr3_for_guest_with_host_pcid(struct vcpu_pvm *pvm)
 {
 	u64 root_hpa = pvm->vcpu.arch.mmu->root.hpa;
@@ -760,6 +800,7 @@ static void pvm_set_host_cr3_for_guest_with_host_pcid(struct vcpu_pvm *pvm)
 	if (is_smod(pvm)) {
 		this_cpu_write(cpu_tss_rw.tss_ex.smod_cr3, hw_cr3 | CR3_NOFLUSH);
 		switch_host_cr3 = this_cpu_read(cpu_tss_rw.tss_ex.umod_cr3);
+		pvm_pgtbl_preload_for_guest_with_host_pcid(pvm, &switch_host_cr3);
 	} else {
 		this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, hw_cr3 | CR3_NOFLUSH);
 		switch_host_cr3 = this_cpu_read(cpu_tss_rw.tss_ex.smod_cr3);
@@ -1853,6 +1894,9 @@ static int handle_hc_load_pagetables(struct kvm_vcpu *vcpu, unsigned long flags,
 	if (cr4 != vcpu->arch.cr4) {
 		vcpu->arch.cr4 = cr4;
 		kvm_mmu_reset_context(vcpu);
+	} else if (enable_pgtbl_preload) {
+		// try to preload user_pgd.
+		kvm_mmu_new_pgd(vcpu, user_pgd);
 	}
 
 	kvm_mmu_new_pgd(vcpu, pgd);
