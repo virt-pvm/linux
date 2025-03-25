@@ -1589,8 +1589,13 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 		 * correspondingly.
 		 *
 		 * The guest should check async exceptions when it clears any
-		 * PVM_PVCS_EVENT_VECTOR_* bits.  The hypervisor should check
-		 * async exceptions when handling ERETU/ERETS.
+		 * PVM_PVCS_EVENT_VECTOR_* bits.
+		 *
+		 * While the guest sets PVM_PVCS_EVENT_VECTOR_STD before
+		 * invoking ERETU/ERETS, it cannot check for any async
+		 * exceptions in an atomic way. Instead, it relies on the
+		 * hypervisor to check for any unhandled async exceptions
+		 * when handling ERETU/ERETS.
 		 */
 		if (vector == NMI_VECTOR)
 			pvcs->event_vector |= PVM_PVCS_EVENT_VECTOR_NMI;
@@ -1600,8 +1605,13 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 			kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
 
 		/*
-		 * Set SWITCH_FLAGS_IRQ_WIN to stop the guest to directly
-		 * switch to the user mode.
+		 * Reuse SWITCH_FLAGS_IRQ_WIN to force the guest ERETU back to
+		 * the hypervisor to meet the requirement stipulated above in
+		 * case it is on the path to ERETU.
+		 *
+		 * When forced back to handle_synthetic_instruction_return(),
+		 * SWITCH_FLAGS_IRQ_WIN will be cleared in kvm_set_rflags() or
+		 * unhandled NMI/MCE will be reinjected.
 		 */
 		to_pvm(vcpu)->switch_flags |= SWITCH_FLAGS_IRQ_WIN;
 
