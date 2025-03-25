@@ -2791,6 +2791,7 @@ static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu)
 		 * directly without triggering a VM exit.
 		 */
 		pvm->rflags &= ~X86_EFLAGS_IF;
+		static_assert(PVM_EVENT_FLAGS_IF == X86_EFLAGS_IF);
 		if (likely(pvm->msr_vcpu_struct))
 			pvm->rflags |= X86_EFLAGS_IF & pvcs->event_flags;
 
