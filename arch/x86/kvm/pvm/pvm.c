@@ -342,7 +342,6 @@ static inline void switch_to_smod(struct kvm_vcpu *vcpu)
 	swap(pvm->msr_switch_cr3, vcpu->arch.cr3);
 
 	pvm_write_guest_gs_base(pvm, pvm->msr_kernel_gs_base);
-	kvm_rsp_write(vcpu, pvm->msr_supervisor_rsp);
 
 	pvm->hw_cs = __USER_CS;
 	pvm->hw_ss = __USER_DS;
@@ -351,8 +350,6 @@ static inline void switch_to_smod(struct kvm_vcpu *vcpu)
 static inline void switch_to_umod(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
-
-	pvm->msr_supervisor_rsp = kvm_rsp_read(vcpu);
 
 	pvm_switch_flags_toggle_mod(pvm);
 	kvm_mmu_new_pgd(vcpu, pvm->msr_switch_cr3);
@@ -1101,9 +1098,6 @@ static int pvm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_PVM_VCPU_STRUCT:
 		msr_info->data = pvm->msr_vcpu_struct;
 		break;
-	case MSR_PVM_SUPERVISOR_RSP:
-		msr_info->data = pvm->msr_supervisor_rsp;
-		break;
 	case MSR_PVM_EVENT_ENTRY:
 		msr_info->data = pvm->msr_event_entry;
 		break;
@@ -1250,9 +1244,6 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 			if (kvm_gpc_activate(&pvm->pvcs_gpc, data, PAGE_SIZE))
 				kvm_make_request(KVM_REQ_GPC_REFRESH, vcpu);
 		}
-		break;
-	case MSR_PVM_SUPERVISOR_RSP:
-		pvm->msr_supervisor_rsp = msr_info->data;
 		break;
 	case MSR_PVM_EVENT_ENTRY:
 		if (is_noncanonical_address(data, vcpu) ||
@@ -1565,7 +1556,6 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 			  bool has_err_code, u64 err_code)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
-	unsigned long rsp = kvm_rsp_read(vcpu);
 	unsigned long entry;
 	struct pvm_vcpu_struct *pvcs;
 
@@ -1622,7 +1612,6 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 
 	pvcs->eflags = kvm_get_rflags(vcpu);
 	pvcs->rip = kvm_rip_read(vcpu);
-	pvcs->rsp = rsp;
 	pvcs->rcx = kvm_rcx_read(vcpu);
 	pvcs->r11 = kvm_r11_read(vcpu);
 
@@ -1643,8 +1632,6 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 
 	if (user)
 		switch_to_smod(vcpu);
-	else
-		kvm_rsp_write(vcpu, rsp & ~15UL);
 
 	if (vector == PVM_SYSCALL_VECTOR)
 		entry = pvm->msr_lstar;
@@ -1839,7 +1826,6 @@ static int handle_synthetic_instruction_return(struct kvm_vcpu *vcpu, bool user)
 		pvcs->event_vector = 0;
 
 	kvm_rip_write(vcpu, pvcs->rip);
-	kvm_rsp_write(vcpu, pvcs->rsp);
 	kvm_rcx_write(vcpu, pvcs->rcx);
 	kvm_r11_write(vcpu, pvcs->r11);
 	rflags = pvcs->eflags;
@@ -2656,7 +2642,6 @@ static noinstr void pvm_vcpu_run_noinstr(struct kvm_vcpu *vcpu)
 	tss_ex->retu_rip = pvm->msr_retu_rip_plus2;
 	tss_ex->smod_entry = pvm->msr_lstar;
 	tss_ex->smod_gsbase = pvm->msr_kernel_gs_base;
-	tss_ex->smod_rsp = pvm->msr_supervisor_rsp;
 
 	if (unlikely(pvm->guest_dr7 & DR7_BP_EN_MASK))
 		set_debugreg(pvm_eff_dr7(vcpu), 7);
@@ -2664,10 +2649,8 @@ static noinstr void pvm_vcpu_run_noinstr(struct kvm_vcpu *vcpu)
 	// Call into switcher and enter guest.
 	ret_regs = switcher_enter_guest();
 
-	// Get the resulted mode and PVM MSRs which might be changed
-	// when direct switching.
+	// Get the resulted mode
 	pvm->switch_flags = tss_ex->switch_flags;
-	pvm->msr_supervisor_rsp = tss_ex->smod_rsp;
 
 	// Get the guest registers from the host sp0 stack.
 	save_regs(vcpu, ret_regs);
@@ -2901,7 +2884,6 @@ static void pvm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 	memset(&pvm->tls_array[0], 0, sizeof(pvm->tls_array));
 
 	pvm->msr_vcpu_struct = 0;
-	pvm->msr_supervisor_rsp = 0;
 	pvm->msr_event_entry = 0;
 	pvm->msr_retu_rip_plus2 = 0;
 	pvm->msr_rets_rip_plus2 = 0;

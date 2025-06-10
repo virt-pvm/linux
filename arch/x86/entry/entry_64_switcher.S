@@ -147,8 +147,6 @@ SYM_INNER_LABEL(entry_SYSCALL_64_switcher_safe_stack, SYM_L_GLOBAL)
 	movq	%rcx, PVCS_rip(%rdi)
 	movq	%rcx, PVCS_rcx(%rdi)
 	movq	%r11, PVCS_r11(%rdi)
-	movq	RSP-ORIG_RAX(%rsp), %rcx
-	movq	%rcx, PVCS_rsp(%rdi)
 
 	/* switch umod to smod (switch_flags & cr3) */
 	xorb	$SWITCH_FLAGS_MOD_TOGGLE, TSS_extra(switch_flags)
@@ -156,8 +154,6 @@ SYM_INNER_LABEL(entry_SYSCALL_64_switcher_safe_stack, SYM_L_GLOBAL)
 	movq	%rcx, %cr3
 
 	/* load smod registers from TSS_extra to sp0 stack or %r11 */
-	movq	TSS_extra(smod_rsp), %rcx
-	movq	%rcx, RSP-ORIG_RAX(%rsp)
 	movq	TSS_extra(smod_entry), %rcx
 	movq	%rcx, RIP-ORIG_RAX(%rsp)
 	movq	TSS_extra(smod_gsbase), %r11
@@ -203,10 +199,6 @@ SYM_INNER_LABEL(entry_SYSRETQ_switcher_unsafe_stack, SYM_L_GLOBAL)
 	cmpl	$((__USER_DS << 16) | __USER_CS), PVCS_user_cs(%rdi)
 	jne	.L_switcher_return_to_hypervisor
 
-	/* Switcher and the PVM specification requires the smod RSP to be saved */
-	movq	RSP-ORIG_RAX(%rsp), %rcx
-	movq	%rcx, TSS_extra(smod_rsp)
-
 	/* switch smod to umod (switch_flags & cr3) */
 	xorb	$SWITCH_FLAGS_MOD_TOGGLE, TSS_extra(switch_flags)
 	movq	TSS_extra(umod_cr3), %rcx
@@ -220,9 +212,7 @@ SYM_INNER_LABEL(entry_SYSRETQ_switcher_unsafe_stack, SYM_L_GLOBAL)
 	canonical_rcx
 	wrgsbase %rcx
 
-	/* load sp, flags, ip to sp0 stack and cx, r11, rdi to registers */
-	movq	PVCS_rsp(%rdi), %rcx
-	movq	%rcx, RSP-ORIG_RAX(%rsp)
+	/* load flags, ip to sp0 stack and cx, r11, rdi to registers */
 	movl	PVCS_eflags(%rdi), %r11d
 	movq	%r11, EFLAGS-ORIG_RAX(%rsp)
 	movq	PVCS_rip(%rdi), %rcx

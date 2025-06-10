@@ -134,7 +134,6 @@ struct vcpu_pvm {
 
 	// PVM paravirt MSRs
 	unsigned long msr_vcpu_struct;
-	unsigned long msr_supervisor_rsp;
 	unsigned long msr_event_entry;
 	unsigned long msr_retu_rip_plus2;
 	unsigned long msr_rets_rip_plus2;

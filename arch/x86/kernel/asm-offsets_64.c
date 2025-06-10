@@ -73,7 +73,6 @@ int main(void)
 	ENTRY(retu_rip);
 	ENTRY(smod_entry);
 	ENTRY(smod_gsbase);
-	ENTRY(smod_rsp);
 	BLANK();
 #undef ENTRY
 
@@ -84,7 +83,6 @@ int main(void)
 	ENTRY(user_cs);
 	ENTRY(user_ss);
 	ENTRY(user_gsbase);
-	ENTRY(rsp);
 	ENTRY(eflags);
 	ENTRY(rip);
 	ENTRY(rcx);
