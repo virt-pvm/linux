@@ -9,15 +9,29 @@
 
 /* Construct struct pt_regs on stack */
 .macro PUSH_IRET_FRAME_FROM_PVCS user:req
+	movq	%rsp,	%r11
 	.if \user == 1
+		movq	PER_CPU_VAR(pcpu_hot + X86_top_of_stack), %rsp
+
 		movl	PER_CPU_VAR(pvm_vcpu_struct + PVCS_user_ss), %ecx
 		andl	$0xFFFF, %ecx
 		pushq	%rcx				/* pt_regs->ss */
 	.else
+		andq	$-16, %rsp
+
+		/*
+		 * Reserve a fixed-size area in the current stack during an
+		 * event from supervisor mode. This is for the int3 handler
+		 * to emulate a call instruction.
+		 */
+		subq	$16, %rsp
+
+		/* TODO: check stack overflow */
+
 		pushq	$__KERNEL_DS
 	.endif
 
-	pushq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_rsp) /* pt_regs->sp */
+	pushq	%r11					/* pt_regs->sp */
 	movl	PER_CPU_VAR(pvm_vcpu_struct + PVCS_eflags), %ecx
 	pushq	%rcx					/* pt_regs->flags */
 
@@ -67,10 +81,10 @@
 	movw	%cx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_user_cs)
 	movq	3*8(%rsp), %rcx		/* RFLAGS */
 	movl	%ecx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_eflags)
-	movq	4*8(%rsp), %rcx		/* RSP */
-	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rsp)
 	movq	5*8(%rsp), %rcx		/* SS */
 	movw	%cx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_user_ss)
+
+	movq	4*8(%rsp), %rsp		/* RSP */
 .endm
 
 .code64
@@ -143,15 +157,8 @@ SYM_CODE_START(pvm_user_event_entry)
 	PUSH_REGS_AND_HANDLE_EVENT handler=pvm_event
 
 SYM_INNER_LABEL(pvm_restore_regs_and_return_to_usermode, SYM_L_GLOBAL)
+	STACKLEAK_ERASE
 	POP_REGS_AND_LOAD_IRET_FRAME_INTO_PVCS
-
-	/*
-	 * We are on the trampoline stack.  All regs are live.
-	 * We can do future final exit work right here.
-	 */
-	STACKLEAK_ERASE_NOCLOBBER
-
-	addq	$6*8, %rsp
 SYM_INNER_LABEL(pvm_retu_rip, SYM_L_GLOBAL)
 	ANNOTATE_NOENDBR
 	syscall
@@ -166,19 +173,9 @@ SYM_CODE_START(pvm_kernel_event_entry)
 	UNWIND_HINT_ENTRY
 	ENDBR
 
-	/*
-	 * Reserve a fixed-size area in the current stack during an event from
-	 * supervisor mode. This is for the int3 handler to emulate a call instruction.
-	 */
-	subq	$16, %rsp
-
-	/* TODO: check stack overflow */
-
 	PUSH_IRET_FRAME_FROM_PVCS user=0
 	PUSH_REGS_AND_HANDLE_EVENT handler=pvm_event
 	POP_REGS_AND_LOAD_IRET_FRAME_INTO_PVCS
-
-	addq	$(6*8+16), %rsp
 SYM_INNER_LABEL(pvm_rets_rip, SYM_L_GLOBAL)
 	ANNOTATE_NOENDBR
 	syscall
@@ -194,7 +191,6 @@ SYM_CODE_START_NOALIGN(pvm_early_kernel_event_entry)
 	PUSH_REGS_AND_HANDLE_EVENT handler=pvm_early_event
 	POP_REGS_AND_LOAD_IRET_FRAME_INTO_PVCS
 	decl	early_recursion_flag(%rip)
-	addq	$6*8, %rsp
 	jmp	pvm_rets_rip
 SYM_CODE_END(pvm_early_kernel_event_entry)
 .popsection

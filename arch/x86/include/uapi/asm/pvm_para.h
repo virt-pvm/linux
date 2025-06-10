@@ -37,7 +37,7 @@
 #define MSR_PVM_LINEAR_ADDRESS_RANGE	0x4b564df0
 #define MSR_PVM_VCPU_STRUCT		0x4b564df1
 #define MSR_PVM_SWITCH_CR3		0x4b564df2
-#define MSR_PVM_SUPERVISOR_RSP		0x4b564df3
+// #define MSR_PVM_SUPERVISOR_RSP	0x4b564df3 // deprecated, FIXME: reordering when sending v2
 #define MSR_PVM_EVENT_ENTRY		0x4b564df4
 #define MSR_PVM_RETU_RIP		0x4b564df5
 #define MSR_PVM_RETS_RIP		0x4b564df6
@@ -136,14 +136,13 @@ struct pvm_vcpu_struct {
 	u16 user_cs, user_ss;
 	u16 event_errcode;
 	u16 event_vector;
-	u64 reserved2;
 	u64 user_gsbase;
 	u32 eflags;
 	u32 pkru;
 	u64 rip;
-	u64 rsp;
 	u64 rcx;
 	u64 r11;
+	u64 reserved1[2];
 };
 
 #endif /* __ASSEMBLY__ */

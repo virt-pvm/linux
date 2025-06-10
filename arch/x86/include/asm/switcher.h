@@ -105,7 +105,6 @@ struct tss_extra {
 	unsigned long retu_rip;
 	unsigned long smod_entry;
 	unsigned long smod_gsbase;
-	unsigned long smod_rsp;
 } ____cacheline_aligned;
 
 extern struct pt_regs *switcher_enter_guest(void);
