@@ -118,6 +118,7 @@ static unsigned long long pvm_read_msr(unsigned int msr)
 static int notrace pvm_write_msr_safe(unsigned int msr, u32 low, u32 high)
 {
 	unsigned long base = ((u64)high << 32) | low;
+	u64 pvcs_pa;
 
 	switch (msr) {
 	case MSR_FS_BASE:
@@ -125,6 +126,18 @@ static int notrace pvm_write_msr_safe(unsigned int msr, u32 low, u32 high)
 		return 0;
 	case MSR_KERNEL_GS_BASE:
 		this_cpu_write(pvm_vcpu_struct.user_gsbase, base);
+		return 0;
+	case MSR_GS_BASE:
+		pvm_hypercall2(PVM_HC_WRMSR, msr, base);
+		/*
+		 * During the boot process, the boot CPU will switch GSBASE
+		 * from the .init.data area to the runtime per-CPU area (via
+		 * the PV-awared wrmsr() and reach here), so the architectural
+		 * physical address of PVCS needs to be updated.
+		 */
+		pvcs_pa = slow_virt_to_phys(this_cpu_ptr(&pvm_vcpu_struct));
+
+		wrmsrl(MSR_PVM_VCPU_STRUCT, pvcs_pa);
 		return 0;
 	default:
 		return pvm_hypercall2(PVM_HC_WRMSR, msr, base);
@@ -491,20 +504,6 @@ void __init pvm_early_setup(void)
 	wrmsrl(MSR_PVM_RETS_RIP, (unsigned long)(void *)pvm_rets_rip);
 
 	pvm_early_patch();
-}
-
-void __init pvm_switch_pvcs(int cpu)
-{
-	/*
-	 * During the boot process, the boot CPU will switch GSBASE from the
-	 * .init.data area to the runtime per-CPU area, so we need to switch
-	 * the physical address of PVCS after that.
-	 */
-	if (boot_cpu_has(X86_FEATURE_KVM_PVM_GUEST) && !cpu) {
-		u64 xpa = slow_virt_to_phys(this_cpu_ptr(&pvm_vcpu_struct));
-
-		wrmsrl(MSR_PVM_VCPU_STRUCT, xpa);
-	}
 }
 
 void pvm_setup_event_handling(void)
