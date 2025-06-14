@@ -5,12 +5,12 @@
 #include <linux/const.h>
 
 /*
- * The CPUID instruction in PVM guest can't be trapped and emulated,
+ * The CPUID instruction in PVM guest might not be trapped and emulated,
  * so PVM guest should use the following two instructions instead:
  * "invlpg 0xffffffffff4d5650; cpuid;"
  *
- * PVM_SYNTHETIC_CPUID is supposed to not trigger any trap in the real or
- * virtual x86 kernel mode and is also guaranteed to trigger a trap in the
+ * PVM_SYNTHETIC_CPUID is supposed to not trigger any trap in the real or any
+ * paravirtual x86 kernel mode and is also guaranteed to trigger a trap in the
  * underlying hardware user mode for the hypervisor emulating it. The
  * hypervisor emulates both of the basic instructions, while the INVLPG is
  * often emulated as an NOP since 0xffffffffff4d5650 is normally out of the
@@ -19,12 +19,6 @@
 #define PVM_SYNTHETIC_CPUID		0x0f,0x01,0x3c,0x25,0x50, \
 					0x56,0x4d,0xff,0x0f,0xa2
 #define PVM_SYNTHETIC_CPUID_ADDRESS	0xffffffffff4d5650
-
-/*
- * The vendor signature 'PVM' is returned in ebx. It should be used to
- * determine that a VM is running under PVM.
- */
-#define PVM_CPUID_SIGNATURE		0x4d5650
 
 /*
  * PVM virtual MSRS falls in the range 0x4b564df0-0x4b564dff, and it should not
