@@ -3265,7 +3265,6 @@ static void pvm_exit(void)
 	kvm_x86_vendor_exit();
 	host_mmu_destroy();
 	allow_smaller_maxphyaddr = false;
-	kvm_cpuid_vendor_signature = 0;
 }
 module_exit(pvm_exit);
 
@@ -3330,7 +3329,6 @@ static int __init pvm_init(void)
 		goto exit_vendor;
 
 	allow_smaller_maxphyaddr = true;
-	kvm_cpuid_vendor_signature = PVM_CPUID_SIGNATURE;
 
 	return 0;
 

@@ -54,14 +54,6 @@ void __init kvm_init_xstate_sizes(void)
 
 		cpuid_count(0xD, i, &xs->eax, &xs->ebx, &xs->ecx, &ign);
 	}
-u32 kvm_cpuid_vendor_features;
-EXPORT_SYMBOL_GPL(kvm_cpuid_vendor_features);
-u32 kvm_cpuid_vendor_signature;
-EXPORT_SYMBOL_GPL(kvm_cpuid_vendor_signature);
-
-static inline bool has_kvm_cpuid_vendor_features(void)
-{
-	return !!kvm_cpuid_vendor_signature;
 }
 
 u32 xstate_required_size(u64 xstate_bv, bool compacted)
@@ -1181,10 +1173,7 @@ static inline int __do_cpuid_func(struct kvm_cpuid_array *array, u32 function)
 		break;
 	case KVM_CPUID_SIGNATURE: {
 		const u32 *sigptr = (const u32 *)KVM_SIGNATURE;
-		if (!has_kvm_cpuid_vendor_features())
-			entry->eax = KVM_CPUID_FEATURES;
-		else
-			entry->eax = KVM_CPUID_VENDOR_FEATURES;
+		entry->eax = KVM_CPUID_FEATURES;
 		entry->ebx = sigptr[0];
 		entry->ecx = sigptr[1];
 		entry->edx = sigptr[2];
@@ -1209,17 +1198,6 @@ static inline int __do_cpuid_func(struct kvm_cpuid_array *array, u32 function)
 			entry->eax |= (1 << KVM_FEATURE_STEAL_TIME);
 
 		entry->ebx = 0;
-		entry->ecx = 0;
-		entry->edx = 0;
-		break;
-	case KVM_CPUID_VENDOR_FEATURES:
-		if (!has_kvm_cpuid_vendor_features()) {
-			entry->eax = 0;
-			entry->ebx = 0;
-		} else {
-			entry->eax = kvm_cpuid_vendor_features;
-			entry->ebx = kvm_cpuid_vendor_signature;
-		}
 		entry->ecx = 0;
 		entry->edx = 0;
 		break;
