@@ -30,41 +30,38 @@ static inline void pvm_cpuid(unsigned int *eax, unsigned int *ebx,
 }
 
 /*
- * pvm_detect() is called before event handling is set up and it might be
- * possibly called under any hypervisor other than PVM, so it should not
- * trigger any trap in all possible scenarios. PVM_SYNTHETIC_CPUID is supposed
- * to not trigger any trap in the real or virtual x86 kernel mode and is also
- * guaranteed to trigger a trap in the underlying hardware user mode for the
- * hypervisor emulating it.
+ * pvm_detect() is required to be called before event handling is set up, but
+ * it might also be possibly called under any hypervisor other than PVM.
+ *
+ * Any hypervisor that places the guest kernel in a state where the underlying
+ * interrupt flag is enabled and the underlying CS is 3 should intercept
+ * the CPUID instruction in the PVM_SYNTHETIC_CPUID, which must not trigger
+ * any trap according to the corresponding [paravirtual] architecture.
  */
 static inline bool pvm_detect(void)
 {
 	unsigned long cs;
 	uint32_t eax, signature[3];
 
-	/* check underlying interrupt flags */
+	/* check the underlying interrupt flag */
 	if (arch_irqs_disabled_flags(native_save_fl()))
 		return false;
 
-	/* check underlying CS */
+	/* check the underlying CS */
 	asm volatile("mov %%cs,%0\n\t" : "=r" (cs) : );
 	if ((cs & 3) != 3)
 		return false;
 
-	/* check KVM_SIGNATURE and KVM_CPUID_VENDOR_FEATURES */
+	/* check the KVM_SIGNATURE leaf */
 	eax = KVM_CPUID_SIGNATURE;
 	pvm_cpuid(&eax, &signature[0], &signature[1], &signature[2]);
 	if (memcmp(KVM_SIGNATURE, signature, 12))
 		return false;
-	if (eax < KVM_CPUID_VENDOR_FEATURES)
-		return false;
 
-	/* check PVM_CPUID_SIGNATURE */
-	eax = KVM_CPUID_VENDOR_FEATURES;
-	pvm_cpuid(&eax, &signature[0], &signature[1], &signature[2]);
-	if (signature[0] != PVM_CPUID_SIGNATURE)
-		return false;
-
+	/*
+	 * PVM is the only KVM variant that places the guest kernel in
+	 * a state where the underlying IF == 1 and underlying CS == 3.
+	 */
 	return true;
 }
 #else
