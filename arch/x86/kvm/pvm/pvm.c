@@ -26,15 +26,13 @@
 #include "trace.h"
 #include "x86.h"
 #include "pvm.h"
+#include "mmu/spte.h"
 
 MODULE_AUTHOR("AntGroup");
 MODULE_LICENSE("GPL");
 
 static bool __read_mostly enable_cpuid_intercept = 0;
 module_param_named(cpuid_intercept, enable_cpuid_intercept, bool, 0444);
-
-static bool __read_mostly enable_pgtbl_preload = 0;
-module_param_named(pgtbl_preload, enable_pgtbl_preload, bool, 0444);
 
 static bool __read_mostly is_intel;
 
@@ -744,53 +742,28 @@ static void pvm_flush_hwtlb_gva(struct kvm_vcpu *vcpu, gva_t addr)
 	put_cpu();
 }
 
-static bool check_switch_cr3(struct vcpu_pvm *pvm, u64 switch_host_cr3)
+static u64 get_switch_hw_cr3(struct vcpu_pvm *pvm)
 {
-	u64 root = pvm->vcpu.arch.mmu->prev_roots[0].hpa;
+	struct kvm_mmu *mmu = pvm->vcpu.arch.mmu;
+	u64 cr3 = is_smod(pvm) ? pvm->vcpu.arch.cr3 : pvm->msr_switch_cr3;
+	int i;
 
-	if (pvm->vcpu.arch.mmu->prev_roots[0].pgd != pvm->msr_switch_cr3)
-		return false;
-	if (!VALID_PAGE(root))
-		return false;
-	if (root != (switch_host_cr3 & CR3_ADDR_MASK))
-		return false;
-
-	if (static_cpu_has(X86_FEATURE_PCID)) {
-		if (host_pcid_owner(switch_host_cr3 & X86_CR3_PCID_MASK) != pvm)
-			return false;
-		if (host_pcid_root(switch_host_cr3 & X86_CR3_PCID_MASK) != root)
-			return false;
-	}
-
-	return true;
-}
-
-static void pvm_pgtbl_preload_for_guest_with_host_pcid(struct vcpu_pvm *pvm, u64 *switch_host_cr3)
-{
-	u32 host_pcid;
-	u64 hw_cr3;
-	u64 prev_root_hpa = pvm->vcpu.arch.mmu->prev_roots[0].hpa;
-
-	if (enable_pgtbl_preload &&
-		VALID_PAGE(prev_root_hpa) &&
-		pvm->vcpu.arch.mmu->prev_roots[0].pgd == pvm->msr_switch_cr3 &&
-		*switch_host_cr3 != pvm->msr_switch_cr3) {
-		host_pcid = host_pcid_find(pvm, prev_root_hpa);
-		if (host_pcid) {
-			hw_cr3 = prev_root_hpa | host_pcid;
-			this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, hw_cr3 | CR3_NOFLUSH);
-			*switch_host_cr3 = hw_cr3 | CR3_NOFLUSH;
+	for (i = 0; i < KVM_MMU_NUM_PREV_ROOTS; i++) {
+		if (is_root_usable(&mmu->prev_roots[i], cr3, mmu->root_role)) {
+			if (i != 0)
+				swap(mmu->prev_roots[0], mmu->prev_roots[i]);
+			return mmu->prev_roots[0].hpa;
 		}
 	}
 
-	return;
+	return INVALID_PAGE;
 }
 
 static void pvm_set_host_cr3_for_guest(struct vcpu_pvm *pvm)
 {
 	u64 hw_cr3 = pvm->vcpu.arch.mmu->root.hpa;
 	u64 enter_hw_cr3 = hw_cr3;
-	u64 switch_host_cr3;
+	u64 switch_hw_cr3 = get_switch_hw_cr3(pvm);
 
 	if (static_cpu_has(X86_FEATURE_PCID)) {
 		bool flush = false;
@@ -800,21 +773,27 @@ static void pvm_set_host_cr3_for_guest(struct vcpu_pvm *pvm)
 		if (!flush)
 			enter_hw_cr3 |= CR3_NOFLUSH;
 		hw_cr3 |= host_pcid | CR3_NOFLUSH;
+
+		if (switch_hw_cr3 != INVALID_PAGE) {
+			host_pcid = host_pcid_find(pvm, switch_hw_cr3);
+			if (!host_pcid)
+				switch_hw_cr3 = INVALID_PAGE;
+			else
+				switch_hw_cr3 |= host_pcid | CR3_NOFLUSH;
+		}
 	}
 
 	this_cpu_write(cpu_tss_rw.tss_ex.enter_cr3, enter_hw_cr3);
 
 	if (is_smod(pvm)) {
 		this_cpu_write(cpu_tss_rw.tss_ex.smod_cr3, hw_cr3);
-		switch_host_cr3 = this_cpu_read(cpu_tss_rw.tss_ex.umod_cr3);
-		if (static_cpu_has(X86_FEATURE_PCID))
-			pvm_pgtbl_preload_for_guest_with_host_pcid(pvm, &switch_host_cr3);
+		this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, switch_hw_cr3);
 	} else {
 		this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, hw_cr3);
-		switch_host_cr3 = this_cpu_read(cpu_tss_rw.tss_ex.smod_cr3);
+		this_cpu_write(cpu_tss_rw.tss_ex.smod_cr3, switch_hw_cr3);
 	}
 
-	if (check_switch_cr3(pvm, switch_host_cr3))
+	if (switch_hw_cr3 != INVALID_PAGE)
 		pvm->switch_flags &= ~SWITCH_FLAGS_NO_DS_CR3;
 	else
 		pvm->switch_flags |= SWITCH_FLAGS_NO_DS_CR3;
@@ -1902,9 +1881,6 @@ static int handle_hc_load_pagetables(struct kvm_vcpu *vcpu, unsigned long flags,
 	if (cr4 != vcpu->arch.cr4) {
 		vcpu->arch.cr4 = cr4;
 		kvm_mmu_reset_context(vcpu);
-	} else if (enable_pgtbl_preload) {
-		// try to preload user_pgd.
-		kvm_mmu_new_pgd(vcpu, user_pgd);
 	}
 
 	kvm_mmu_new_pgd(vcpu, pgd);
