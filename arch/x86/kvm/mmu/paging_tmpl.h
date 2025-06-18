@@ -674,6 +674,7 @@ static int FNAME(fetch)(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault,
 
 		table_gfn = gw->table_gfn[it.level - 2];
 		access = gw->pt_access[it.level - 2];
+		access = validate_pvm_indirect_access(vcpu, it.sptep, access, direct_access);
 		sp = kvm_mmu_get_child_sp(vcpu, it.sptep, table_gfn,
 					  false, access);
 
