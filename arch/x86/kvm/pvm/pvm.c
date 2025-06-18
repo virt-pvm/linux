@@ -336,8 +336,8 @@ static inline void switch_to_smod(struct kvm_vcpu *vcpu)
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 
 	pvm_switch_flags_toggle_mod(pvm);
-	kvm_mmu_new_pgd(vcpu, pvm->msr_switch_cr3);
-	swap(pvm->msr_switch_cr3, vcpu->arch.cr3);
+	vcpu->arch.mmu->root_role.access &= ~ACC_USER_MASK;
+	kvm_mmu_new_pgd(vcpu, vcpu->arch.cr3);
 
 	pvm_write_guest_gs_base(pvm, pvm->msr_kernel_gs_base);
 
@@ -350,8 +350,8 @@ static inline void switch_to_umod(struct kvm_vcpu *vcpu)
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 
 	pvm_switch_flags_toggle_mod(pvm);
-	kvm_mmu_new_pgd(vcpu, pvm->msr_switch_cr3);
-	swap(pvm->msr_switch_cr3, vcpu->arch.cr3);
+	vcpu->arch.mmu->root_role.access |= ACC_USER_MASK;
+	kvm_mmu_new_pgd(vcpu, vcpu->arch.cr3);
 }
 
 /*
@@ -745,11 +745,12 @@ static void pvm_flush_hwtlb_gva(struct kvm_vcpu *vcpu, gva_t addr)
 static u64 get_switch_hw_cr3(struct vcpu_pvm *pvm)
 {
 	struct kvm_mmu *mmu = pvm->vcpu.arch.mmu;
-	u64 cr3 = is_smod(pvm) ? pvm->vcpu.arch.cr3 : pvm->msr_switch_cr3;
+	union kvm_mmu_page_role switch_role = mmu->root_role;
 	int i;
 
+	switch_role.access ^= ACC_USER_MASK;
 	for (i = 0; i < KVM_MMU_NUM_PREV_ROOTS; i++) {
-		if (is_root_usable(&mmu->prev_roots[i], cr3, mmu->root_role)) {
+		if (is_root_usable(&mmu->prev_roots[i], pvm->vcpu.arch.cr3, switch_role)) {
 			if (i != 0)
 				swap(mmu->prev_roots[0], mmu->prev_roots[i]);
 			return mmu->prev_roots[0].hpa;
@@ -1086,9 +1087,6 @@ static int pvm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_PVM_RETS_RIP:
 		msr_info->data = pvm->msr_rets_rip_plus2 - 2;
 		break;
-	case MSR_PVM_SWITCH_CR3:
-		msr_info->data = pvm->msr_switch_cr3;
-		break;
 	case MSR_PVM_LINEAR_ADDRESS_RANGE:
 		msr_info->data = pvm->msr_linear_address_range;
 		break;
@@ -1238,9 +1236,6 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		break;
 	case MSR_PVM_RETS_RIP:
 		pvm->msr_rets_rip_plus2 = msr_info->data + 2;
-		break;
-	case MSR_PVM_SWITCH_CR3:
-		pvm->msr_switch_cr3 = msr_info->data;
 		break;
 	case MSR_PVM_LINEAR_ADDRESS_RANGE:
 		if (!pvm_check_and_set_msr_linear_address_range(pvm, msr_info->data))
@@ -1848,29 +1843,26 @@ static int handle_hc_irq_halt(struct kvm_vcpu *vcpu)
 	return kvm_emulate_halt_noskip(vcpu);
 }
 
-static void pvm_flush_tlb_guest_current_kernel_user(struct kvm_vcpu *vcpu)
+static void pvm_flush_tlb_guest_current(struct kvm_vcpu *vcpu)
 {
 	/*
-	 * sync the current pgd and user_pgd (pvm->msr_switch_cr3)
-	 * which is a subset work of KVM_REQ_TLB_FLUSH_GUEST.
+	 * sync the current pgd which is a subset work of KVM_REQ_TLB_FLUSH_GUEST.
 	 */
 	kvm_make_request(KVM_REQ_TLB_FLUSH_GUEST, vcpu);
 }
 
 /*
  * Hypercall: PVM_HC_LOAD_PGTBL
- *	Load two PGDs into the current CR3 and MSR_PVM_SWITCH_CR3.
+ *	Load two PGDs into the current CR3.
  *
  * Arguments:
  *	flags:	bit0: flush the TLBs tagged with @pgd and @user_pgd.
  *		bit1: 4 (bit1=0) or 5 (bit1=1 && cpuid_has(LA57)) level paging.
  *	pgd: to be loaded into CR3.
- *	user_pgd: to be loaded into MSR_PVM_SWITCH_CR3.
  */
 static int handle_hc_load_pagetables(struct kvm_vcpu *vcpu, unsigned long flags,
-				     unsigned long pgd, unsigned long user_pgd)
+				     unsigned long pgd)
 {
-	struct vcpu_pvm *pvm = to_pvm(vcpu);
 	unsigned long cr4 = vcpu->arch.cr4;
 
 	if (!(flags & PVM_LOAD_PGTBL_FLAGS_LA57))
@@ -1885,10 +1877,9 @@ static int handle_hc_load_pagetables(struct kvm_vcpu *vcpu, unsigned long flags,
 
 	kvm_mmu_new_pgd(vcpu, pgd);
 	vcpu->arch.cr3 = pgd;
-	pvm->msr_switch_cr3 = user_pgd;
 
 	if (flags & PVM_LOAD_PGTBL_FLAGS_TLB)
-		pvm_flush_tlb_guest_current_kernel_user(vcpu);
+		pvm_flush_tlb_guest_current(vcpu);
 
 	return 1;
 }
@@ -1906,11 +1897,11 @@ static int handle_hc_flush_tlb_all(struct kvm_vcpu *vcpu)
 
 /*
  * Hypercall: PVM_HC_TLB_FLUSH_CURRENT
- *	Flush all TLBs tagged with the current CR3 and MSR_PVM_SWITCH_CR3.
+ *	Flush all TLBs tagged with the current CR3.
  */
-static int handle_hc_flush_tlb_current_kernel_user(struct kvm_vcpu *vcpu)
+static int handle_hc_flush_tlb_current(struct kvm_vcpu *vcpu)
 {
-	pvm_flush_tlb_guest_current_kernel_user(vcpu);
+	pvm_flush_tlb_guest_current(vcpu);
 
 	return 1;
 }
@@ -2118,11 +2109,11 @@ static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 	case PVM_HC_IRQ_HALT:
 		return handle_hc_irq_halt(vcpu);
 	case PVM_HC_LOAD_PGTBL:
-		return handle_hc_load_pagetables(vcpu, a0, a1, a2);
+		return handle_hc_load_pagetables(vcpu, a0, a1);
 	case PVM_HC_TLB_FLUSH:
 		return handle_hc_flush_tlb_all(vcpu);
 	case PVM_HC_TLB_FLUSH_CURRENT:
-		return handle_hc_flush_tlb_current_kernel_user(vcpu);
+		return handle_hc_flush_tlb_current(vcpu);
 	case PVM_HC_TLB_INVLPG:
 		return handle_hc_invlpg(vcpu, a0);
 	case PVM_HC_LOAD_GS:
@@ -2740,8 +2731,8 @@ static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu)
 	pvm_vcpu_run_noinstr(vcpu);
 
 	if (is_smod_befor_run != is_smod(pvm)) {
+		vcpu->arch.mmu->root_role.access ^= ACC_USER_MASK;
 		swap(pvm->vcpu.arch.mmu->root, pvm->vcpu.arch.mmu->prev_roots[0]);
-		swap(pvm->msr_switch_cr3, pvm->vcpu.arch.cr3);
 	}
 
 	/* MSR_IA32_DEBUGCTLMSR is zeroed before vmenter. Restore it if needed */
@@ -2863,7 +2854,6 @@ static void pvm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 	pvm->msr_event_entry = 0;
 	pvm->msr_retu_rip_plus2 = 0;
 	pvm->msr_rets_rip_plus2 = 0;
-	pvm->msr_switch_cr3 = 0;
 	pvm_set_default_msr_linear_address_range(pvm);
 }
 
@@ -2991,7 +2981,8 @@ static __init void pvm_set_cpu_caps(void)
 	 * PVM doesn't support SMEP.  When NX is supported and the guest can
 	 * use NX on the user pagetable to emulate the same protection as SMEP.
 	 */
-	kvm_cpu_cap_clear(X86_FEATURE_SMEP);
+	if (boot_cpu_has(X86_FEATURE_NX))
+		kvm_cpu_cap_set(X86_FEATURE_SMEP);
 
 	/*
 	 * Unlike VMX/SVM which can switches paging mode atomically, PVM

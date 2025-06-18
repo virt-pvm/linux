@@ -183,11 +183,6 @@ static unsigned long pvm_read_cr3(void)
 	return this_cpu_read(pvm_guest_cr3);
 }
 
-static unsigned long pvm_user_pgd(unsigned long pgd)
-{
-	return pgd | BIT(PTI_PGTABLE_SWITCH_BIT) | BIT(X86_CR3_PTI_PCID_USER_BIT);
-}
-
 static void pvm_write_cr3(unsigned long val)
 {
 	/* Convert CR3_NO_FLUSH bit to hypercall flags. */
@@ -197,7 +192,7 @@ static void pvm_write_cr3(unsigned long val)
 	if (pgtable_l5_enabled())
 		flags |= PVM_LOAD_PGTBL_FLAGS_LA57;
 	this_cpu_write(pvm_guest_cr3, pgd);
-	pvm_hypercall3(PVM_HC_LOAD_PGTBL, flags, pgd, pvm_user_pgd(pgd));
+	pvm_hypercall2(PVM_HC_LOAD_PGTBL, flags, pgd);
 }
 
 static void pvm_flush_tlb_user(void)

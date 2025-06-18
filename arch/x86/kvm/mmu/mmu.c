@@ -2466,6 +2466,18 @@ static void __link_shadow_page(struct kvm *kvm,
 
 	spte = make_nonleaf_spte(sp->spt, sp_ad_disabled(sp));
 
+	/* for PVM, if the host has NX, force guest SMEP */
+	if (kvm->arch.host_mmu_root_pgd && cpu_feature_enabled(X86_FEATURE_NX)) {
+		struct kvm_mmu_page *parent = sptep_to_sp(sptep);
+
+		/*
+		 * validate_pvm_indirect_access() enables user sp linked beneath
+		 * kernel sp.
+		 */
+		if (!(parent->role.access & ACC_USER_MASK) && (sp->role.access & ACC_USER_MASK))
+			spte |= shadow_nx_mask;
+	}
+
 	mmu_spte_set(sptep, spte);
 
 	mmu_page_add_parent_pte(cache, sp, sptep);
@@ -2487,6 +2499,40 @@ static void link_shadow_page(struct kvm_vcpu *vcpu, u64 *sptep,
 			     struct kvm_mmu_page *sp)
 {
 	__link_shadow_page(vcpu->kvm, &vcpu->arch.mmu_pte_list_desc_cache, sptep, sp, true);
+}
+
+static unsigned validate_pvm_indirect_access(struct kvm_vcpu *vcpu, u64 *sptep,
+					     unsigned access, unsigned leaf_access)
+{
+	/*
+	 * return directly when non-pvm or it is going to create user sp/spte
+	 * which is allowed under both kernel and user sp
+	 */
+	if (!vcpu->kvm->arch.host_mmu_root_pgd || (leaf_access & ACC_USER_MASK))
+		return access;
+
+	access &= ~ACC_USER_MASK;
+
+	if (is_shadow_present_pte(*sptep) && !is_large_pte(*sptep)) {
+		struct kvm_mmu_page *child;
+
+		/*
+		 * For the pvm indirect sp, if the previous linked child
+		 * is for user pagetable, no kernel sp/page should be
+		 * mapped under the child, so the child should be updated
+		 * if it is the case.  It is not possible the case for
+		 * current Linux PVM guest, but this check has to be examed
+		 * for correctness.
+		 */
+		child = spte_to_child_sp(*sptep);
+		if (!(child->role.access & ACC_USER_MASK))
+			return access;
+
+		drop_parent_pte(vcpu->kvm, child, sptep);
+		kvm_flush_remote_tlbs_sptep(vcpu->kvm, sptep);
+	}
+
+	return access;
 }
 
 static void validate_direct_spte(struct kvm_vcpu *vcpu, u64 *sptep,
@@ -5282,9 +5328,13 @@ static void kvm_init_shadow_mmu(struct kvm_vcpu *vcpu,
 	root_role.level = max_t(u32, root_role.level, PT32E_ROOT_LEVEL);
 
 	/* Shadow MMU level should be the same as host for PVM */
-	if (vcpu->kvm->arch.host_mmu_root_pgd && root_role.level != HOST_ROOT_LEVEL) {
-		root_role.level = HOST_ROOT_LEVEL;
-		root_role.passthrough = 1;
+	if (vcpu->kvm->arch.host_mmu_root_pgd) {
+		if (root_role.level != HOST_ROOT_LEVEL) {
+			root_role.level = HOST_ROOT_LEVEL;
+			root_role.passthrough = 1;
+		}
+		if (static_call(kvm_x86_get_cpl)(vcpu) == 0)
+			root_role.access &= ~ACC_USER_MASK;
 	}
 
 	/*

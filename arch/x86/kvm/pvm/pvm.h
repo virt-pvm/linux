@@ -137,7 +137,6 @@ struct vcpu_pvm {
 	unsigned long msr_event_entry;
 	unsigned long msr_retu_rip_plus2;
 	unsigned long msr_rets_rip_plus2;
-	unsigned long msr_switch_cr3;
 	unsigned long msr_linear_address_range;
 
 	u64 l4_range_start;

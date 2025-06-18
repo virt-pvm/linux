@@ -30,7 +30,7 @@
 
 #define MSR_PVM_LINEAR_ADDRESS_RANGE	0x4b564df0
 #define MSR_PVM_VCPU_STRUCT		0x4b564df1
-#define MSR_PVM_SWITCH_CR3		0x4b564df2
+// #define MSR_PVM_SWITCH_CR3		0x4b564df2 // deprecated, FIXME: reordering when sending v2
 // #define MSR_PVM_SUPERVISOR_RSP	0x4b564df3 // deprecated, FIXME: reordering when sending v2
 #define MSR_PVM_EVENT_ENTRY		0x4b564df4
 #define MSR_PVM_RETU_RIP		0x4b564df5
