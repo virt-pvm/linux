@@ -107,6 +107,9 @@ SYM_CODE_START_NOALIGN(relocate_kernel)
 	/* setup a new stack at the end of the physical control page */
 	lea	PAGE_SIZE(%r8), %rsp
 
+	/* take the virtual address of virtual_mapped() before jumping */
+	leaq	virtual_mapped(%rip), %r14
+
 	/* jump to identity mapped page */
 	addq	$(identity_mapped - relocate_kernel), %r8
 	pushq	%r8
@@ -226,8 +229,7 @@ SYM_CODE_START_LOCAL_NOALIGN(identity_mapped)
 	movq	%rax, %cr3
 	lea	PAGE_SIZE(%r8), %rsp
 	call	swap_pages
-	movq	$virtual_mapped, %rax
-	pushq	%rax
+	pushq	%r14
 	ANNOTATE_UNRET_SAFE
 	ret
 	int3
@@ -246,7 +248,7 @@ SYM_CODE_START_LOCAL_NOALIGN(virtual_mapped)
 
 #ifdef CONFIG_KEXEC_JUMP
 	/* Saved in save_processor_state. */
-	movq    $saved_context, %rax
+	leaq    saved_context(%rip), %rax
 	lgdt    saved_context_gdt_desc(%rax)
 #endif
 
