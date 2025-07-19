@@ -496,7 +496,6 @@ void __init pvm_early_setup(void)
 
 	wrmsrl(MSR_PVM_VCPU_STRUCT, __pa(this_cpu_ptr(&pvm_vcpu_struct)));
 	wrmsrl(MSR_PVM_EVENT_ENTRY, (unsigned long)(void *)pvm_early_kernel_event_entry - 512);
-	wrmsrl(MSR_PVM_RETS_RIP, (unsigned long)(void *)pvm_rets_rip);
 
 	pvm_early_patch();
 }
@@ -509,7 +508,6 @@ void pvm_setup_event_handling(void)
 		wrmsrl(MSR_PVM_VCPU_STRUCT, xpa);
 		wrmsrl(MSR_PVM_EVENT_ENTRY, (unsigned long)(void *)pvm_user_event_entry);
 		wrmsrl(MSR_PVM_RETU_RIP, (unsigned long)(void *)pvm_retu_rip);
-		wrmsrl(MSR_PVM_RETS_RIP, (unsigned long)(void *)pvm_rets_rip);
 
 		/*
 		 * PVM spec requires the hypervisor-maintained

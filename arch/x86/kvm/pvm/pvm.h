@@ -29,9 +29,8 @@
 #define PVM_EXIT_REASONS_SYSCALL	(1UL << PVM_EXIT_REASONS_SHIFT)
 #define PVM_EXIT_REASONS_HYPERCALL	(2UL << PVM_EXIT_REASONS_SHIFT)
 #define PVM_EXIT_REASONS_ERETU		(3UL << PVM_EXIT_REASONS_SHIFT)
-#define PVM_EXIT_REASONS_ERETS		(4UL << PVM_EXIT_REASONS_SHIFT)
-#define PVM_EXIT_REASONS_INTERRUPT	(5UL << PVM_EXIT_REASONS_SHIFT)
-#define PVM_EXIT_REASONS_INT80		(6UL << PVM_EXIT_REASONS_SHIFT)
+#define PVM_EXIT_REASONS_INTERRUPT	(4UL << PVM_EXIT_REASONS_SHIFT)
+#define PVM_EXIT_REASONS_INT80		(5UL << PVM_EXIT_REASONS_SHIFT)
 
 #define PVM_EXIT_REASONS		\
 	{ DE_VECTOR, "DE excp" },	\
@@ -55,7 +54,6 @@
 	{ PVM_EXIT_REASONS_SYSCALL, "SYSCALL" },	\
 	{ PVM_EXIT_REASONS_HYPERCALL, "HYPERCALL" },	\
 	{ PVM_EXIT_REASONS_ERETU, "ERETU" },		\
-	{ PVM_EXIT_REASONS_ERETS, "ERETS" },		\
 	{ PVM_EXIT_REASONS_INTERRUPT, "INTERRUPT" },	\
 	{ PVM_EXIT_REASONS_INT80, "INT80" },		\
 	{ PVM_FAILED_VMENTRY_VECTOR, "FAILED_VMENTRY" }
@@ -136,7 +134,6 @@ struct vcpu_pvm {
 	unsigned long msr_vcpu_struct;
 	unsigned long msr_event_entry;
 	unsigned long msr_retu_rip_plus2;
-	unsigned long msr_rets_rip_plus2;
 	unsigned long msr_linear_address_range;
 
 	u64 l4_range_start;

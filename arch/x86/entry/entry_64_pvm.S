@@ -7,6 +7,8 @@
 
 #include "calling.h"
 
+#define REDZONE_SIZE	16
+
 /* Construct struct pt_regs on stack */
 .macro PUSH_IRET_FRAME_FROM_PVCS user:req
 	movq	%rsp,	%r11
@@ -24,7 +26,7 @@
 		 * event from supervisor mode. This is for the int3 handler
 		 * to emulate a call instruction.
 		 */
-		subq	$16, %rsp
+		subq	$REDZONE_SIZE, %rsp
 
 		/* TODO: check stack overflow */
 
@@ -174,11 +176,67 @@ SYM_CODE_START(pvm_kernel_event_entry)
 	ENDBR
 
 	PUSH_IRET_FRAME_FROM_PVCS user=0
+
+	// if RIP < .L_pvm_supervisor_iret_irq_enabled_start ==> skip fixup
+	leaq	.L_pvm_supervisor_iret_irq_enabled_start(%rip), %rcx
+	cmpq	RIP-RIP(%rsp), %rcx
+	ja	.L_pvm_supervisor_iret_irq_fixed
+
+	// if RIP >= .L_pvm_supervisor_iret_irq_enabled_end ==> skip fixup
+	leaq	.L_pvm_supervisor_iret_irq_enabled_end(%rip), %rcx
+	cmpq	RIP-RIP(%rsp), %rcx
+	jbe	.L_pvm_supervisor_iret_irq_fixed
+
+	// fixup to Previous IRET Frame
+	//	Previous IRET Frame
+	//	RAX
+	//	RCX
+	//	R11
+	//	HW_ring3 IRET Frame	<-- origin rsp
+	//	padding for alignment (8 bytes)
+	//	RED_ZONE (16 bytes)
+	//	Current IRET Frame
+	movq	RSP-RIP(%rsp), %rcx
+	movq	(16+40)(%rcx), %rax
+	movq	( 8+40)(%rcx), %r11
+	movq	%r11, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rcx)
+	movq	( 0+40)(%rcx), %r11
+	leaq	(24+40)(%rcx), %rsp
+.L_pvm_supervisor_iret_irq_fixed:
+	movq	PER_CPU_VAR(pvm_vcpu_struct + PVCS_rcx), %rcx
+
 	PUSH_REGS_AND_HANDLE_EVENT handler=pvm_event
-	POP_REGS_AND_LOAD_IRET_FRAME_INTO_PVCS
-SYM_INNER_LABEL(pvm_rets_rip, SYM_L_GLOBAL)
-	ANNOTATE_NOENDBR
+
+.L_pvm_supervisor_restore_regs_and_return:
+	POP_REGS
+	movq	%rax, (%rsp)
+	pushq	%rcx
+	pushq	%r11
+	mov	%ss, %rax
+	pushq	%rax		/* current hw SS for supervisor_iret */
+	pushq	8*7(%rsp)	/* RSP */
+	pushq	8*7(%rsp)	/* RFLAGS */
+	mov	%cs, %rax
+	pushq	%rax		/* current hw CS for supervisor_iret */
+	pushq	8*7(%rsp)	/* RIP */
+	testl	$X86_EFLAGS_IF, EFLAGS-RIP(%rsp)
+	jz	.L_pvm_supervisor_iret
+	orq	$X86_EFLAGS_IF, PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_flags)
+.L_pvm_supervisor_iret_irq_enabled_start:
+	btq	$PVM_EVENT_FLAGS_IP_BIT, PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_flags)
+	jc	.L_pvm_supervisor_iret_irq_pending
+.L_pvm_supervisor_iret:
+	movq	8*7(%rsp), %rax
+	iretq
+.L_pvm_supervisor_iret_irq_pending:
+	/* handle pending IRQ */
+	movq	$PVM_HC_IRQ_WIN, %rax
 	syscall
+	// normally don't reach here, but it can only happend when there is actually no IRQ pending
+	movq	8*5(%rsp), %r11
+	movq	8*6(%rsp), %rcx
+	jmp	.L_pvm_supervisor_iret
+.L_pvm_supervisor_iret_irq_enabled_end:
 SYM_CODE_END(pvm_kernel_event_entry)
 
 .pushsection .head.text, "ax"
@@ -189,8 +247,7 @@ SYM_CODE_START_NOALIGN(pvm_early_kernel_event_entry)
 	incl	early_recursion_flag(%rip)
 	PUSH_IRET_FRAME_FROM_PVCS user=0
 	PUSH_REGS_AND_HANDLE_EVENT handler=pvm_early_event
-	POP_REGS_AND_LOAD_IRET_FRAME_INTO_PVCS
 	decl	early_recursion_flag(%rip)
-	jmp	pvm_rets_rip
+	jmp	.L_pvm_supervisor_restore_regs_and_return
 SYM_CODE_END(pvm_early_kernel_event_entry)
 .popsection

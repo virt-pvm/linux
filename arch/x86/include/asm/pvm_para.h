@@ -91,7 +91,6 @@ void entry_SYSCALL_64_pvm(void);
 void pvm_user_event_entry(void);
 void pvm_hypercall(void);
 void pvm_retu_rip(void);
-void pvm_rets_rip(void);
 void pvm_save_fl(void);
 void pvm_irq_disable(void);
 void pvm_irq_enable(void);
