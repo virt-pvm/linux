@@ -1084,9 +1084,6 @@ static int pvm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_PVM_RETU_RIP:
 		msr_info->data = pvm->msr_retu_rip_plus2 - 2;
 		break;
-	case MSR_PVM_RETS_RIP:
-		msr_info->data = pvm->msr_rets_rip_plus2 - 2;
-		break;
 	case MSR_PVM_LINEAR_ADDRESS_RANGE:
 		msr_info->data = pvm->msr_linear_address_range;
 		break;
@@ -1233,9 +1230,6 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		break;
 	case MSR_PVM_RETU_RIP:
 		pvm->msr_retu_rip_plus2 = msr_info->data + 2;
-		break;
-	case MSR_PVM_RETS_RIP:
-		pvm->msr_rets_rip_plus2 = msr_info->data + 2;
 		break;
 	case MSR_PVM_LINEAR_ADDRESS_RANGE:
 		if (!pvm_check_and_set_msr_linear_address_range(pvm, msr_info->data))
@@ -1573,7 +1567,7 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 		 * the hypervisor to meet the requirement stipulated above in
 		 * case it is on the path to ERETU.
 		 *
-		 * When forced back to handle_synthetic_instruction_return(),
+		 * When forced back to handle_synthetic_instruction_return_user(),
 		 * SWITCH_FLAGS_IRQ_WIN will be cleared in kvm_set_rflags() or
 		 * unhandled NMI/MCE will be reinjected.
 		 */
@@ -1776,7 +1770,7 @@ static void pvm_setup_mce(struct kvm_vcpu *vcpu)
 {
 }
 
-static int handle_synthetic_instruction_return(struct kvm_vcpu *vcpu, bool user)
+static int handle_synthetic_instruction_return_user(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 	struct pvm_vcpu_struct *pvcs;
@@ -1784,8 +1778,7 @@ static int handle_synthetic_instruction_return(struct kvm_vcpu *vcpu, bool user)
 	u32 pending_async_exceptions;
 
 	/* switch to user mode before rsp changed. */
-	if (user)
-		switch_to_umod(vcpu);
+	switch_to_umod(vcpu);
 
 	pvcs = pvm_get_vcpu_struct(pvm);
 	if (!pvcs) {
@@ -1794,21 +1787,16 @@ static int handle_synthetic_instruction_return(struct kvm_vcpu *vcpu, bool user)
 	}
 
 	pending_async_exceptions = pvcs->event_vector;
-	if (user)
-		pvcs->event_vector = PVM_PVCS_EVENT_VECTOR_STD;
-	else
-		pvcs->event_vector = 0;
+	pvcs->event_vector = PVM_PVCS_EVENT_VECTOR_STD; // Clear other bits
 
 	kvm_rip_write(vcpu, pvcs->rip);
 	kvm_rcx_write(vcpu, pvcs->rcx);
 	kvm_r11_write(vcpu, pvcs->r11);
 	rflags = pvcs->eflags;
 
-	if (user) {
-		pvm->hw_cs = pvcs->user_cs | USER_RPL;
-		pvm->hw_ss = pvcs->user_ss | USER_RPL;
-		pvm_write_guest_gs_base(pvm, pvcs->user_gsbase);
-	}
+	pvm->hw_cs = pvcs->user_cs | USER_RPL;
+	pvm->hw_ss = pvcs->user_ss | USER_RPL;
+	pvm_write_guest_gs_base(pvm, pvcs->user_gsbase);
 
 	pvm_put_vcpu_struct(pvm, true);
 
@@ -1819,9 +1807,9 @@ static int handle_synthetic_instruction_return(struct kvm_vcpu *vcpu, bool user)
 	kvm_set_rflags(vcpu, rflags);
 
 	if (pending_async_exceptions & PVM_PVCS_EVENT_VECTOR_MCE)
-		__do_pvm_event(vcpu, user, MC_VECTOR, false, 0);
+		do_pvm_event(vcpu, MC_VECTOR, false, 0);
 	if (pending_async_exceptions & PVM_PVCS_EVENT_VECTOR_NMI)
-		__do_pvm_event(vcpu, user, NMI_VECTOR, false, 0);
+		do_pvm_event(vcpu, NMI_VECTOR, false, 0);
 
 	return 1;
 }
@@ -2094,9 +2082,7 @@ static int handle_exit_syscall(struct kvm_vcpu *vcpu)
 		return __do_pvm_event(vcpu, true, PVM_SYSCALL_VECTOR, false, 0);
 
 	if (rip == pvm->msr_retu_rip_plus2)
-		return handle_synthetic_instruction_return(vcpu, true);
-	if (rip == pvm->msr_rets_rip_plus2)
-		return handle_synthetic_instruction_return(vcpu, false);
+		return handle_synthetic_instruction_return_user(vcpu);
 
 	a0 = kvm_rbx_read(vcpu);
 	a1 = kvm_r10_read(vcpu);
@@ -2398,8 +2384,6 @@ static u32 pvm_get_syscall_exit_reason(struct kvm_vcpu *vcpu)
 	if (is_smod(pvm)) {
 		if (rip == pvm->msr_retu_rip_plus2)
 			return PVM_EXIT_REASONS_ERETU;
-		else if (rip == pvm->msr_rets_rip_plus2)
-			return PVM_EXIT_REASONS_ERETS;
 		else
 			return PVM_EXIT_REASONS_HYPERCALL;
 	}
@@ -2853,7 +2837,6 @@ static void pvm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 	pvm->msr_vcpu_struct = 0;
 	pvm->msr_event_entry = 0;
 	pvm->msr_retu_rip_plus2 = 0;
-	pvm->msr_rets_rip_plus2 = 0;
 	pvm_set_default_msr_linear_address_range(pvm);
 }
 

@@ -34,7 +34,7 @@
 // #define MSR_PVM_SUPERVISOR_RSP	0x4b564df3 // deprecated, FIXME: reordering when sending v2
 #define MSR_PVM_EVENT_ENTRY		0x4b564df4
 #define MSR_PVM_RETU_RIP		0x4b564df5
-#define MSR_PVM_RETS_RIP		0x4b564df6
+// #define MSR_PVM_RETS_RIP		0x4b564df6
 
 #define PVM_HC_SPECIAL_MAX_NR		(256)
 #define PVM_HC_SPECIAL_BASE		(0x17088200)
