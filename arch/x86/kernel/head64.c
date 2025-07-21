@@ -20,6 +20,7 @@
 #include <linux/io.h>
 #include <linux/memblock.h>
 #include <linux/cc_platform.h>
+#include <linux/elf.h>
 #include <linux/pgtable.h>
 
 #include <asm/asm.h>
@@ -588,3 +589,38 @@ void __head startup_64_setup_gdt_idt(void)
 
 	startup_64_load_idt(handler);
 }
+
+#ifdef CONFIG_X86_PIE
+void __head startup_64_apply_relocations(struct boot_params *bp)
+{
+	extern const Elf64_Rela __rela_start[], __rela_end[];
+	extern const u64 __relr_start[], __relr_end[];
+	u64 va_offset = (u64)RIP_REL_REF(_text) - __START_KERNEL;
+	u64 va_shift = bp->kaslr_va_shift;
+	u64 *place = NULL;
+
+	if (!va_shift)
+		return;
+
+	for (const Elf64_Rela *r = __rela_start; r < __rela_end; r++) {
+		if (ELF64_R_TYPE(r->r_info) != R_X86_64_RELATIVE)
+			continue;
+
+		place = (u64 *)(r->r_offset + va_offset);
+		*place += va_shift;
+	}
+
+	for (const u64 *rel = __relr_start; rel < __relr_end; rel++) {
+		if ((*rel & 1) == 0) {
+			place = (u64 *)(*rel + va_offset);
+			*place++ += va_shift;
+			continue;
+		}
+
+		for (u64 *p = place, r = *rel >> 1; r; p++, r >>= 1)
+			if (r & 1)
+				*p += va_shift;
+		place += 63;
+	}
+}
+#endif

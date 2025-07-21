@@ -71,6 +71,11 @@ SYM_CODE_START_NOALIGN(startup_64)
 	xorl	%edx, %edx
 	wrmsr
 
+#ifdef CONFIG_X86_PIE
+	movq	%r15, %rdi
+	call	startup_64_apply_relocations
+#endif
+
 	call	startup_64_setup_gdt_idt
 
 	/* Now switch to __KERNEL_CS so IRET works reliably */
@@ -139,7 +144,7 @@ SYM_CODE_START_NOALIGN(startup_64)
 	jmp	*.Lcommon_startup_64(%rip)
 SYM_CODE_END(startup_64)
 
-	__INITRODATA
+	__INITDATA
 SYM_DATA_LOCAL(.Lcommon_startup_64, .quad common_startup_64)
 
 	.text

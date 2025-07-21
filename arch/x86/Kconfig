@@ -2161,6 +2161,7 @@ config RELOCATABLE
 config X86_PIE
 	def_bool n
 	depends on X86_64
+	select ARCH_HAS_RELR
 
 config RANDOMIZE_BASE
 	bool "Randomize the address of the kernel image (KASLR)"
