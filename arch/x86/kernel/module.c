@@ -264,6 +264,7 @@ static int __write_relocate_add(Elf64_Shdr *sechdrs,
 			val = (u64)&addr + rel[i].r_addend;
 			fallthrough;
 		}
+#endif
 #else
 		case R_X86_64_GOTPCREL:
 		case R_X86_64_GOTPCRELX:

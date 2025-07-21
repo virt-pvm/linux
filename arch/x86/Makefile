@@ -191,6 +191,17 @@ else
         KBUILD_RUSTFLAGS += -Cno-redzone=y
         KBUILD_RUSTFLAGS += -Ccode-model=kernel
 
+        ifeq ($(CONFIG_X86_PIE),y)
+                PIE_CFLAGS-y := -fpie -mcmodel=small \
+                                -include $(srctree)/include/linux/hidden.h
+
+                PIE_CFLAGS-$(CONFIG_CC_IS_GCC) += $(call cc-option.-mdirect-extern-access)
+                PIE_CFLAGS-$(CONFIG_CC_IS_CLANG) += -fdirect-access-external-data
+
+                KBUILD_CFLAGS_KERNEL += $(PIE_CFLAGS-y)
+                KBUILD_CFLAGS_MODULE += $(PIE_CFLAGS-y)
+        endif
+
         percpu_seg := gs
 endif
 
