@@ -50,6 +50,19 @@ config FORCE_DYNAMIC_FTRACE
 	  No need to keep it for x86_32. For x86_32, force DYNAMIC_FTRACE.
 	  To avoid adding more updates to !DYNAMIC_FTRACE code, force
 	  DYNAMIC_FTRACE when PIE is enabled.
+
+config CC_HAS_INDIRECT_FTRACE_CALL
+	bool
+	depends on X86_PIE
+	depends on DYNAMIC_FTRACE
+	depends on CC_IS_GCC
+	default $(success,$(srctree)/scripts/gcc-x86_64-PIE-has-indirect-ftrace.sh $(CC))
+	help
+	  Before GCC 14, the compiler would generate a 6-byte GOT indirect
+	  call for ftrace, which is incompatible with the default ftrace nop
+	  patching. So we need to patch the indirect GOT call as a 5-byte nop
+	  followed a 1-byte nop to preserve the previous 5-byte format as before.
+
 #
 # Arch settings
 #
@@ -214,7 +227,7 @@ config X86
 	select HAVE_CMPXCHG_LOCAL
 	select HAVE_CONTEXT_TRACKING_USER		if X86_64
 	select HAVE_CONTEXT_TRACKING_USER_OFFSTACK	if HAVE_CONTEXT_TRACKING_USER
-	select HAVE_C_RECORDMCOUNT
+	select HAVE_C_RECORDMCOUNT		if !X86_PIE
 	select HAVE_OBJTOOL_MCOUNT		if HAVE_OBJTOOL
 	select HAVE_OBJTOOL_NOP_MCOUNT		if HAVE_OBJTOOL_MCOUNT
 	select HAVE_BUILDTIME_MCOUNT_SORT
