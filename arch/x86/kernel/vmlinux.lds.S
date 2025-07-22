@@ -446,6 +446,13 @@ SECTIONS
 
 	DISCARDS
 
+#ifdef CONFIG_X86_PIE
+	/DISCARD/ : {
+		*(.dynsym .gnu.hash .hash .dynamic .dynstr)
+		*(.interp .dynbss .eh_frame .sframe)
+	}
+#endif
+
 	/*
 	 * Make sure that the .got.plt is either completely empty or it
 	 * contains only the lazy dispatch entries.

@@ -2159,9 +2159,14 @@ config RELOCATABLE
 	  (CONFIG_PHYSICAL_START) is used as the minimum location.
 
 config X86_PIE
-	def_bool n
+	bool "Build a PIE kernel"
+	default n
 	depends on X86_64
 	select ARCH_HAS_RELR
+	select RELOCATABLE
+	help
+	  This builds a PIE kernel image that could be put at any
+	  virtual address.
 
 config RANDOMIZE_BASE
 	bool "Randomize the address of the kernel image (KASLR)"
@@ -2202,6 +2207,7 @@ config RANDOMIZE_BASE
 config X86_NEED_RELOCS
 	def_bool y
 	depends on RANDOMIZE_BASE || (X86_32 && RELOCATABLE)
+	depends on !X86_PIE
 
 config PHYSICAL_ALIGN
 	hex "Alignment value to which kernel should be aligned"
