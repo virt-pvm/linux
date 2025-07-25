@@ -185,17 +185,38 @@ unsigned long __head __startup_64(unsigned long p2v_offset,
 	/* Fixup the physical addresses in the page table */
 
 	pgd = &RIP_REL_REF(early_top_pgt)->pgd;
-	pgd[pgd_index(__START_KERNEL_map)] += load_delta;
+	if (IS_ENABLED(CONFIG_X86_PIE)) {
+		pgd[pgd_index(__START_KERNEL_map)] = 0;
+		pud = (pudval_t *)level3_kernel_pgt;
 
-	if (la57) {
-		p4d = (p4dval_t *)&RIP_REL_REF(level4_kernel_pgt);
-		p4d[MAX_PTRS_PER_P4D - 1] += load_delta;
+		if (la57) {
+			p4d = (p4dval_t *)level4_kernel_pgt;
+			p4d[MAX_PTRS_PER_P4D - 1] = 0;
+			p4d[p4d_index(va_text)] = (p4dval_t)pud | _PAGE_TABLE;
 
-		pgd[pgd_index(__START_KERNEL_map)] = (pgdval_t)p4d | _PAGE_TABLE;
+			pgd[pgd_index(va_text)] = (pgdval_t)p4d | _PAGE_TABLE;
+		} else {
+			pgd[pgd_index(va_text)] = (pgdval_t)pud | _PAGE_TABLE;
+		}
+
+		pud[PTRS_PER_PUD - 2] = 0;
+		pud[PTRS_PER_PUD - 1] = 0;
+		i = pud_index(va_text);
+		pud[i] = (pudval_t)level2_kernel_pgt | _KERNPG_TABLE;
+		pud[i+ 1] = (pudval_t)level2_fixmap_pgt | _PAGE_TABLE;
+	} else {
+		pgd[pgd_index(__START_KERNEL_map)] += load_delta;
+
+		if (la57) {
+			p4d = (p4dval_t *)&RIP_REL_REF(level4_kernel_pgt);
+			p4d[MAX_PTRS_PER_P4D - 1] += load_delta;
+
+			pgd[pgd_index(__START_KERNEL_map)] = (pgdval_t)p4d | _PAGE_TABLE;
+		}
+
+		RIP_REL_REF(level3_kernel_pgt)[PTRS_PER_PUD - 2].pud += load_delta;
+		RIP_REL_REF(level3_kernel_pgt)[PTRS_PER_PUD - 1].pud += load_delta;
 	}
-
-	RIP_REL_REF(level3_kernel_pgt)[PTRS_PER_PUD - 2].pud += load_delta;
-	RIP_REL_REF(level3_kernel_pgt)[PTRS_PER_PUD - 1].pud += load_delta;
 
 	for (i = FIXMAP_PMD_TOP; i > FIXMAP_PMD_TOP - FIXMAP_PMD_NUM; i--)
 		RIP_REL_REF(level2_fixmap_pgt)[i].pmd += load_delta;
@@ -282,7 +303,9 @@ unsigned long __head __startup_64(unsigned long p2v_offset,
 /* Wipe all early page tables except for the kernel symbol map */
 static void __init reset_early_page_tables(void)
 {
-	memset(early_top_pgt, 0, sizeof(pgd_t)*(PTRS_PER_PGD-1));
+	int k_index = pgd_index((unsigned long)_text);
+
+	memset(early_top_pgt, 0, sizeof(pgd_t)*k_index);
 	next_early_pgt = 0;
 	write_cr3(__sme_pa_nodebug(early_top_pgt));
 }
@@ -433,6 +456,8 @@ static void __init copy_bootdata(char *real_mode_data)
 
 asmlinkage __visible void __init __noreturn x86_64_start_kernel(char * real_mode_data)
 {
+	int k_index = pgd_index((unsigned long)_text);
+
 	/*
 	 * Build-time sanity checks on the kernel image and module
 	 * area mappings. (these are purely build-time and produce no code)
@@ -491,7 +516,7 @@ asmlinkage __visible void __init __noreturn x86_64_start_kernel(char * real_mode
 	load_ucode_bsp();
 
 	/* set init_top_pgt kernel high mapping*/
-	init_top_pgt[511] = early_top_pgt[511];
+	init_top_pgt[k_index] = early_top_pgt[k_index];
 
 	x86_64_start_reservations(real_mode_data);
 }
