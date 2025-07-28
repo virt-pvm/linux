@@ -338,6 +338,11 @@ const char *arch_nop_insn(int len)
 	return (const char *)&nop;
 }
 
+const char *arch_ftrace_nop_insn(int len)
+{
+	return arch_nop_insn(len);
+}
+
 const char *arch_ret_insn(int len)
 {
 	static u32 ret;

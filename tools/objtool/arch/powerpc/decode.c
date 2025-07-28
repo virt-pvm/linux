@@ -34,6 +34,11 @@ const char *arch_nop_insn(int len)
 	exit(-1);
 }
 
+const char *arch_ftrace_nop_insn(int len)
+{
+	return arch_nop_insn(len);
+}
+
 const char *arch_ret_insn(int len)
 {
 	exit(-1);

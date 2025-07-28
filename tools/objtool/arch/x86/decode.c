@@ -778,6 +778,22 @@ const char *arch_nop_insn(int len)
 	return nops[len-1];
 }
 
+const char *arch_ftrace_nop_insn(int len)
+{
+	/*
+	 * GCC versions before 14 generate a 6-byte GOT indirect call for
+	 * ftrace, so use a 5-byte nop and 1-byte nop to keep the ftrace
+	 * hooking algorithm working correct.
+	 */
+	static const char got_nops[6] = {
+		BYTES_NOP5, BYTES_NOP1,
+	};
+
+	if (len == 6)
+		return got_nops;
+	return arch_nop_insn(len);
+}
+
 #define BYTE_RET	0xC3
 
 const char *arch_ret_insn(int len)
