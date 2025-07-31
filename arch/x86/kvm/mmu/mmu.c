@@ -4896,24 +4896,6 @@ static void nonpaging_init_context(struct kvm_mmu *context)
 	context->sync_spte = NULL;
 }
 
-static inline bool is_root_usable(struct kvm_mmu_root_info *root, gpa_t pgd,
-				  union kvm_mmu_page_role role)
-{
-	struct kvm_mmu_page *sp;
-
-	if (!VALID_PAGE(root->hpa))
-		return false;
-
-	if (!role.direct && pgd != root->pgd)
-		return false;
-
-	sp = root_to_sp(root->hpa);
-	if (WARN_ON_ONCE(!sp))
-		return false;
-
-	return role.word == sp->role.word;
-}
-
 /*
  * Find out if a previously cached root matching the new pgd/role is available,
  * and insert the current root as the MRU in the cache.
