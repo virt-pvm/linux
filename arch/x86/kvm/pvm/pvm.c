@@ -475,11 +475,16 @@ static u64 get_switch_hw_cr3(struct vcpu_pvm *pvm)
 {
 	struct kvm_mmu *mmu = pvm->vcpu.arch.mmu;
 	union kvm_mmu_page_role switch_role = mmu->root_role;
+	int i;
 
 	switch_role.access ^= ACC_USER_MASK;
-
-	if (is_root_usable(&mmu->prev_roots[0], pvm->vcpu.arch.cr3, switch_role))
-		return __sme_set(mmu->prev_roots[0].hpa);
+	for (i = 0; i < KVM_MMU_NUM_PREV_ROOTS; i++) {
+		if (is_root_usable(&mmu->prev_roots[i], pvm->vcpu.arch.cr3, switch_role)) {
+			if (i != 0)
+				swap(mmu->prev_roots[0], mmu->prev_roots[i]);
+			return __sme_set(mmu->prev_roots[0].hpa);
+		}
+	}
 
 	return INVALID_PAGE;
 }
