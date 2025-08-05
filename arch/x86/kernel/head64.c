@@ -681,7 +681,7 @@ static void __head detect_pvm_range(void)
 
 void __head pvm_relocate_kernel(struct boot_params *bp)
 {
-	if (!pvm_detect())
+	if (pvm_range_end || !pvm_detect())
 		return;
 
 	detect_pvm_range();

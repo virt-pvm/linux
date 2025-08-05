@@ -183,10 +183,17 @@ SYM_CODE_START(pvh_start_xen)
 	xorl %edx, %edx
 	wrmsr
 
+#ifdef CONFIG_PVM_GUEST
+	call pvm_update_pgtable
+#endif
 	/* Call xen_prepare_pvh() via the kernel virtual mapping */
 	leaq xen_prepare_pvh(%rip), %rax
 	subq phys_base(%rip), %rax
+#ifdef CONFIG_PVM_GUEST
+	addq kernel_map_base(%rip), %rax
+#else
 	addq $__START_KERNEL_map, %rax
+#endif
 	ANNOTATE_RETPOLINE_SAFE
 	call *%rax
 
@@ -309,6 +316,11 @@ SYM_DATA_START_PAGE_ALIGNED(pvh_level2_kernel_pgt)
 	PMDS(0, __PAGE_KERNEL_LARGE_EXEC, KERNEL_IMAGE_SIZE / PMD_SIZE)
 SYM_DATA_END(pvh_level2_kernel_pgt)
 
+#ifdef CONFIG_PVM_GUEST
+SYM_DATA_START_PAGE_ALIGNED(pvm_ident_pgt)
+	.fill 1024,8,0
+SYM_DATA_END(pvm_ident_pgt)
+#endif
 	ELFNOTE(Xen, XEN_ELFNOTE_PHYS32_RELOC,
 		     .long CONFIG_PHYSICAL_ALIGN;
 		     .long LOAD_PHYSICAL_ADDR;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/acpi.h>
+#include <linux/pgtable.h>
 
 #include <xen/hvc-console.h>
 
@@ -8,6 +9,7 @@
 #include <asm/hypervisor.h>
 #include <asm/e820/api.h>
 #include <asm/x86_init.h>
+#include <asm/setup.h>
 
 #include <asm/xen/interface.h>
 
@@ -114,6 +116,47 @@ static void __init hypervisor_specific_init(bool xen_guest)
 		xen_pvh_init(&pvh_bootparams);
 }
 
+#ifdef CONFIG_PVM_GUEST
+extern pgd_t pvm_ident_pgt[2][512];
+extern pgd_t pvh_init_top_pgt[512];
+extern pud_t pvh_level3_ident_pgt[512];
+extern pud_t pvh_level3_kernel_pgt[512];
+extern pmd_t pvh_level2_ident_pgt[512];
+extern pmd_t pvh_level2_kernel_pgt[512];
+
+extern void __init pvm_update_pgtable(void);
+
+void __init pvm_update_pgtable(void)
+{
+	unsigned long base;
+
+	if (!pvm_detect())
+		return;
+
+	/*
+	 * There are some relocations in 'pvh_init_top_pgt' pagetable,
+	 * so switch to a temporary identity mapping pagetable to skip modifying
+	 * the current pagetable.
+	 */
+	pvm_ident_pgt[0][0].pgd = (unsigned long)pvm_ident_pgt[1] + _KERNPG_TABLE_NOENC;
+	pvm_ident_pgt[1][0].pgd = (unsigned long)pvh_level2_ident_pgt + _KERNPG_TABLE_NOENC;
+	native_write_cr3((unsigned long)pvm_ident_pgt);
+
+	pvm_relocate_kernel(&pvh_bootparams);
+	startup_64_apply_relocations(&pvh_bootparams);
+	base = (unsigned long)xen_prepare_pvh + pvh_bootparams.kaslr_va_shift + __START_KERNEL_map;
+
+	pvh_init_top_pgt[0].pgd = (unsigned long)pvh_level3_ident_pgt + _KERNPG_TABLE_NOENC;
+	pvh_init_top_pgt[pgd_index(page_offset_base)] = pvh_init_top_pgt[0];
+	pvh_init_top_pgt[pgd_index(base)].pgd = (unsigned long)pvh_level3_kernel_pgt + _KERNPG_TABLE_NOENC;
+	pvh_level3_ident_pgt[0].pud = (unsigned long)pvh_level2_ident_pgt + _KERNPG_TABLE_NOENC;
+	pvh_level3_kernel_pgt[pud_index(base)].pud = (unsigned long)pvh_level2_kernel_pgt + _KERNPG_TABLE_NOENC;
+
+	kernel_map_base = base & PUD_MASK;
+	pvh_bootparams.kaslr_va_shift = 0;
+	native_write_cr3((unsigned long)pvh_init_top_pgt);
+}
+#endif
 /*
  * This routine (and those that it might call) should not use
  * anything that lives in .bss since that segment will be cleared later.
