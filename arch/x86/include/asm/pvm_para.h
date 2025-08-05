@@ -9,6 +9,7 @@
 #include <asm/irqflags.h>
 #include <uapi/asm/kvm_para.h>
 
+void pvm_relocate_kernel(struct boot_params *bp);
 void __init pvm_early_setup(void);
 
 static inline void pvm_cpuid(unsigned int *eax, unsigned int *ebx,

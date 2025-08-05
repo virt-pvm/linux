@@ -13,9 +13,12 @@
 #include <asm/cpufeature.h>
 #include <asm/pvm_para.h>
 
+unsigned long pvm_range_start __initdata;
+unsigned long pvm_range_end __initdata;
+
 void __init pvm_early_setup(void)
 {
-	if (!pvm_detect())
+	if (!pvm_range_end)
 		return;
 
 	setup_force_cpu_cap(X86_FEATURE_KVM_PVM_GUEST);

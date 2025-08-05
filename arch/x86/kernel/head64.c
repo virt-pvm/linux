@@ -45,6 +45,7 @@
 #include <asm/sev.h>
 #include <asm/tdx.h>
 #include <asm/init.h>
+#include <asm/pvm_para.h>
 
 /*
  * Manage page tables very early on.
@@ -659,5 +660,31 @@ void __head startup_64_apply_relocations(struct boot_params *bp)
 				*p += va_shift;
 		place += 63;
 	}
+}
+#endif
+
+#ifdef CONFIG_PVM_GUEST
+extern unsigned long pvm_range_start;
+extern unsigned long pvm_range_end;
+
+static void __head detect_pvm_range(void)
+{
+	unsigned long msr_val;
+	unsigned long pml4_index_start, pml4_index_end;
+
+	msr_val = __rdmsr(MSR_PVM_LINEAR_ADDRESS_RANGE);
+	pml4_index_start = msr_val & 0x1ff;
+	pml4_index_end = (msr_val >> 16) & 0x1ff;
+	pvm_range_start = (0x1fffe00 | pml4_index_start) * P4D_SIZE;
+	pvm_range_end = (0x1fffe00 | pml4_index_end) * P4D_SIZE;
+}
+
+void __head pvm_relocate_kernel(struct boot_params *bp)
+{
+	if (!pvm_detect())
+		return;
+
+	detect_pvm_range();
+	bp->kaslr_va_shift = pvm_range_end - (2UL << 30) - __START_KERNEL_map;
 }
 #endif

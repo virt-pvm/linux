@@ -71,6 +71,11 @@ SYM_CODE_START_NOALIGN(startup_64)
 	xorl	%edx, %edx
 	wrmsr
 
+#ifdef CONFIG_PVM_GUEST
+	movq	%r15, %rdi
+	call	pvm_relocate_kernel
+#endif
+
 #ifdef CONFIG_X86_PIE
 	movq	%r15, %rdi
 	call	startup_64_apply_relocations
