@@ -76,7 +76,7 @@
  * non-zero in supervisor mode, only async-exception can be delivered without
  * jumping to the entry point.  The guest supervisor should check any pending
  * NMI/MCE when handling any events.  The hypervisor will also check it
- * for pending NMI/MCE in handling ERETU/ERETS.  Trying to deliver a non
+ * for pending NMI/MCE in handling ERETU.  Trying to deliver a non
  * async-exception when the highest 8-bit is non-zero in supervisor mode
  * will make it morphed into a triple-fault.
  *
@@ -85,7 +85,7 @@
  *
  * PVM_PVCS_EVENT_VECTOR_STD:
  *	- The supervisor software should set this bit before access to PVCS
- *	  for ERETU/ERETS.  The event_vector remains to be this value during
+ *	  for ERETU.  The event_vector remains to be this value during
  *	  user mode and upon delivering a SYSCALL event from user mode.
  *	  Since async-exception can be dilivered and access to PVCS any time,
  *	  so it is required for protecting the fields related to supervisor
@@ -96,7 +96,7 @@
  * PVM_PVCS_EVENT_VECTOR_NMI
  * PVM_PVCS_EVENT_VECTOR_MCE
  *	- An NMI or MCE is being delivered (or along with other events) or
- *	  pending (during the period the supervisor is about to ERETU/ERETS)
+ *	  pending (during the period the supervisor is about to ERETU)
  */
 #define PVM_PVCS_EVENT_VECTOR_STD_BIT		8
 #define PVM_PVCS_EVENT_VECTOR_STD		_BITUL(PVM_PVCS_EVENT_VECTOR_STD_BIT)
@@ -125,7 +125,7 @@ struct pvm_vcpu_struct {
 	u64 cr2;
 	u64 reserved0[6];
 
-	// For ERETS and the event from supervisor mode, user_cs, user_ss
+	// For the event from supervisor mode, user_cs, user_ss
 	// user_gsbase, and pkru are ignored and kept untouched.
 	u16 user_cs, user_ss;
 	u16 event_errcode;
