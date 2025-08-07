@@ -1455,11 +1455,9 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 		 * The guest should check async exceptions when it clears any
 		 * PVM_PVCS_EVENT_VECTOR_* bits.
 		 *
-		 * While the guest sets PVM_PVCS_EVENT_VECTOR_STD before
-		 * invoking ERETU/ERETS, it cannot check for any async
-		 * exceptions in an atomic way. Instead, it relies on the
-		 * hypervisor to check for any unhandled async exceptions
-		 * when handling ERETU/ERETS.
+		 * The guest should set PVM_PVCS_EVENT_VECTOR_STD before
+		 * invoking ERETU, and the hypervisor check for any unhandled
+		 * async exceptions when handling ERETU.
 		 */
 		if (vector == NMI_VECTOR)
 			pvcs->event_vector |= PVM_PVCS_EVENT_VECTOR_NMI;

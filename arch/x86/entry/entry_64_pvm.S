@@ -68,7 +68,7 @@
 .macro POP_REGS_AND_LOAD_IRET_FRAME_INTO_PVCS
 	POP_REGS
 
-	// get PVCS before access to it
+	// Mark PVCS busy before access to it
 	btsw	$PVM_PVCS_EVENT_VECTOR_STD_BIT, PER_CPU_VAR(pvm_vcpu_struct + PVCS_event_vector)
 
 	// Copy %rcx, %r11 to the PVM CPU structure
@@ -76,7 +76,6 @@
 	movq	%r11, PER_CPU_VAR(pvm_vcpu_struct + PVCS_r11)
 
 	// Copy the IRET frame to the PVM CPU structure
-	// PVCS_user_cs/ss are ignored for ERETS, load them anyway
 	movq	1*8(%rsp), %rcx		/* RIP */
 	movq	%rcx, PER_CPU_VAR(pvm_vcpu_struct + PVCS_rip)
 	movq	2*8(%rsp), %rcx		/* CS */
