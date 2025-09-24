@@ -2546,6 +2546,10 @@ static noinstr void pvm_vcpu_run_noinstr(struct kvm_vcpu *vcpu)
 		get_debugreg(pvm->exit_dr6, 6);
 		set_debugreg(DR6_RESERVED, 6);
 		break;
+	case NM_VECTOR:
+		if (vcpu->arch.guest_fpu.fpstate->xfd)
+			rdmsrl(MSR_IA32_XFD_ERR, vcpu->arch.guest_fpu.xfd_err);
+		break;
 	default:
 		break;
 	}
