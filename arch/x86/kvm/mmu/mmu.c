@@ -2371,6 +2371,9 @@ static struct kvm_mmu_page *kvm_mmu_get_child_sp(struct kvm_vcpu *vcpu,
 	    spte_to_child_sp(*sptep)->role.word == role.word)
 		return ERR_PTR(-EEXIST);
 
+	if (unlikely(pvm_mmu_p4d_at_la57_pgd511(vcpu->kvm, sptep)))
+		role.host_mmu_la57_top_p4d = 1;
+
 	return kvm_mmu_get_shadow_page(vcpu, gfn, role);
 }
 
