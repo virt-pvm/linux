@@ -2907,6 +2907,19 @@ static __init void pvm_set_cpu_caps(void)
 
 	/* Don't expose MSR_IA32_DEBUGCTLMSR related features. */
 	kvm_cpu_cap_clear(X86_FEATURE_BUS_LOCK_DETECT);
+
+	/*
+	 * PKU is disabled for shadow paging in KVM. However, when XSAVE is
+	 * exposed to the guest, this causes the guest's xcr0 to differ from
+	 * the host's xcr0, leading to xcr0 switching during each VM entry and
+	 * exit. This can result in poor performance when running PVM in L1, as
+	 * writing to xcr0 causes a VM exit to L0. The whole PKU function for
+	 * guest is not implemented for now, since Linux kernel didn't use PKU
+	 * for now, so enable guest PKU to keep guest xcr0 same as host xcr0 as
+	 * a temporary fix.
+	 */
+	if (boot_cpu_has(X86_FEATURE_XSAVE) && boot_cpu_has(X86_FEATURE_PKU))
+		kvm_cpu_cap_set(X86_FEATURE_PKU);
 }
 
 static __init int hardware_setup(void)
