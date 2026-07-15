@@ -6,9 +6,12 @@
 #include <asm/svm.h>
 #include <asm/vmx.h>
 #include <asm/kvm.h>
+#include <asm/pvm_trace.h>
+#include <sys/stat.h>
 
 define_exit_reasons_table(vmx_exit_reasons, VMX_EXIT_REASONS);
 define_exit_reasons_table(svm_exit_reasons, SVM_EXIT_REASONS);
+define_exit_reasons_table(pvm_exit_reasons, PVM_EXIT_REASONS);
 
 static struct kvm_events_ops exit_events = {
 	.is_begin_event = exit_event_begin,
@@ -198,9 +201,39 @@ const char * const kvm_skip_events[] = {
 	NULL,
 };
 
+#define INITSTATE_PATH_MAX 256
+#define INITSTATE_MAX 16
+
+static bool module_is_live(const char *module_name)
+{
+	char initstate_path[INITSTATE_PATH_MAX];
+	char initstate[INITSTATE_MAX];
+	bool ret = false;
+	struct stat st;
+	FILE *fp;
+
+	snprintf(initstate_path, sizeof(initstate_path),
+		 "/sys/module/%s/initstate", module_name);
+
+	if (!stat(initstate_path, &st) && S_ISREG(st.st_mode)) {
+		fp = fopen(initstate_path, "r");
+		if (fp) {
+			if (fgets(initstate, sizeof(initstate), fp))
+				ret = !strncmp(initstate, "live", 4);
+
+			fclose(fp);
+		}
+	}
+
+	return ret;
+}
+
 int cpu_isa_init(struct perf_kvm_stat *kvm, const char *cpuid)
 {
-	if (strstr(cpuid, "Intel")) {
+	if (module_is_live("kvm_pvm")) {
+		kvm->exit_reasons = pvm_exit_reasons;
+		kvm->exit_reasons_isa = "PVM";
+	} else if (strstr(cpuid, "Intel")) {
 		kvm->exit_reasons = vmx_exit_reasons;
 		kvm->exit_reasons_isa = "VMX";
 	} else if (strstr(cpuid, "AMD") || strstr(cpuid, "Hygon")) {

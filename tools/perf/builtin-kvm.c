@@ -38,6 +38,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+#include <asm/pvm_trace.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
@@ -620,7 +621,11 @@ void exit_event_get_key(struct evsel *evsel,
 			struct event_key *key)
 {
 	key->info = 0;
+	key->info2 = evsel__intval(evsel, sample, "info2");
 	key->key  = evsel__intval(evsel, sample, kvm_exit_reason);
+
+	if (key->key == PVM_EXIT_REASONS_HYPERCALL)
+		key->key = key->info2;
 }
 
 bool kvm_exit_event(struct evsel *evsel)
