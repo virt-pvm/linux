@@ -11,64 +11,72 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <linux/vmalloc.h>
-
 #include <asm/cpufeature.h>
 #include <asm/vsyscall.h>
 #include <asm/pgtable.h>
+#include <asm/setup.h>
 
 #include "mmu.h"
 #include "mmu/spte.h"
 #include "pvm.h"
 
-#define L4_PT_INDEX(address)	__PT_INDEX(address, 4, 9)
-#define L5_PT_INDEX(address)	__PT_INDEX(address, 5, 9)
+#define PT_L4_INDEX(address)	__PT_INDEX(address, 4, 9)
+#define PT_L5_INDEX(address)	__PT_INDEX(address, 5, 9)
 
-#define PVM_GUEST_MAPPING_START		(-1UL << 47)
+#define PVM_KASAN_L4_SHADOW_START	_AC(0xffffec0000000000, UL)
+#define PVM_KASAN_L5_SHADOW_START	_AC(0xffdf000000000000, UL)
 
-static struct vm_struct *pvm_va_range;
+#define PVM_GUEST_L4_MAPPING_END	_AC(0xfffffc0000000000, UL)
+#define PVM_GUEST_L4_MAPPING_START	(PVM_GUEST_L4_MAPPING_END - DEFAULT_RANGE_L4_SIZE)
+#define PVM_GUEST_L5_MAPPING_END	_AC(0xffff000000000000, UL)
+#define PVM_GUEST_L5_MAPPING_START	(PVM_GUEST_L5_MAPPING_END - DEFAULT_RANGE_L5_SIZE)
 
 u32 pml4_index_start;
 u32 pml4_index_end;
 u32 pml5_index_start;
 u32 pml5_index_end;
 
+/*
+ * kaslr_memory_enabled() is not exported, so check VMEMMAP_START
+ * instead.
+ */
+static bool __init host_kaslr_enabled(void)
+{
+	if (pgtable_l5_enabled())
+		return VMEMMAP_START != __VMEMMAP_BASE_L5;
+
+	return VMEMMAP_START != __VMEMMAP_BASE_L4;
+}
+
 static int __init guest_address_space_init(void)
 {
-	if (IS_ENABLED(CONFIG_KASAN_VMALLOC)) {
-		pr_warn("CONFIG_KASAN_VMALLOC is not compatible with PVM");
+	if (IS_ENABLED(CONFIG_KASAN)) {
+		pr_warn("CONFIG_KASAN is not compatible with PVM");
+		return -1;
+	}
+	if (host_kaslr_enabled()) {
+		pr_warn("KASLR memory randomization is not compatible with PVM");
 		return -1;
 	}
 
+	/*
+	 * Use the fixed x86 KASAN shadow hole as the PVM guest address window.
+	 * KASAN disables KASLR because its shadow mappings rely on PGD
+	 * alignment, and the same property makes the range suitable for PVM.
+	 */
+	BUILD_BUG_ON(PVM_GUEST_L4_MAPPING_START < PVM_KASAN_L4_SHADOW_START);
+	BUILD_BUG_ON(PVM_GUEST_L5_MAPPING_START < PVM_KASAN_L5_SHADOW_START);
+	BUILD_BUG_ON(PVM_GUEST_L4_MAPPING_START < PVM_KASAN_L5_SHADOW_START);
+	BUILD_BUG_ON(PVM_GUEST_L4_MAPPING_END > CPU_ENTRY_AREA_BASE);
+	BUILD_BUG_ON(PVM_GUEST_L5_MAPPING_END > CPU_ENTRY_AREA_BASE);
+
+	pml4_index_start = PT_L4_INDEX(PVM_GUEST_L4_MAPPING_START);
+	pml4_index_end = PT_L4_INDEX(PVM_GUEST_L4_MAPPING_END);
+
 	if (pgtable_l5_enabled()) {
-		if (IS_ENABLED(CONFIG_KASAN)) {
-			pr_warn("CONFIG_KASAN is not compatible with PVM on 5-level paging mode");
-			return -1;
-		}
-
-		BUILD_BUG_ON(PVM_GUEST_MAPPING_START != VADDR_END_L5);
-
-		pml4_index_start = L4_PT_INDEX(PVM_GUEST_MAPPING_START);
-		pml4_index_end = L4_PT_INDEX(RAW_CPU_ENTRY_AREA_BASE);
-
-		pvm_va_range = get_vm_area_align(DEFAULT_RANGE_L5_SIZE, PT_L5_SIZE,
-						 VM_ALLOC|VM_NO_GUARD);
-		if (!pvm_va_range) {
-			pml5_index_start = 0x1ff;
-			pml5_index_end = 0x1ff;
-		} else {
-			pml5_index_start = L5_PT_INDEX((u64)pvm_va_range->addr);
-			pml5_index_end = L5_PT_INDEX((u64)pvm_va_range->addr +
-						     (u64)pvm_va_range->size);
-		}
+		pml5_index_start = PT_L5_INDEX(PVM_GUEST_L5_MAPPING_START);
+		pml5_index_end = PT_L5_INDEX(PVM_GUEST_L5_MAPPING_END);
 	} else {
-		pvm_va_range = get_vm_area_align(DEFAULT_RANGE_L4_SIZE, PT_L4_SIZE,
-						 VM_ALLOC|VM_NO_GUARD);
-		if (!pvm_va_range)
-			return -1;
-
-		pml4_index_start = L4_PT_INDEX((u64)pvm_va_range->addr);
-		pml4_index_end = L4_PT_INDEX((u64)pvm_va_range->addr + (u64)pvm_va_range->size);
 		pml5_index_start = 0x1ff;
 		pml5_index_end = 0x1ff;
 	}
@@ -133,13 +141,10 @@ int __init host_mmu_init(void)
 
 void host_mmu_destroy(void)
 {
-	if (pvm_va_range)
-		free_vm_area(pvm_va_range);
 	if (host_mmu_root_pgd)
 		free_page((unsigned long)(void *)host_mmu_root_pgd);
 	if (host_mmu_la57_top_p4d)
 		free_page((unsigned long)(void *)host_mmu_la57_top_p4d);
-	pvm_va_range = NULL;
 	host_mmu_root_pgd = NULL;
 	host_mmu_la57_top_p4d = NULL;
 }

@@ -159,5 +159,8 @@ correct as KASAN disables KASLR. In the 5-level layout, the end of KASLR range
 is the top 128TG of the address space, which is in the middle of KASAN shadow
 area, rather than the start of the 'cpu_entry_area' in the 4-level layout.
 
+Note that if the PVM hypervisor is enabled, the KASAN shadow area is used by
+the PVM hypervisor, so be very careful when changing anything here.
+
 For both 4- and 5-level layouts, the STACKLEAK_POISON value in the last 2MB
 hole: ffffffffffff4111
