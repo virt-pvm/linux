@@ -153,5 +153,8 @@ Be very careful vs. KASLR when changing anything here. The KASLR address
 range must not overlap with anything except the KASAN shadow area, which is
 correct as KASAN disables KASLR.
 
+Note that if the PVM hypervisor is enabled, the KASAN shadow area is used by
+the PVM hypervisor, so be very careful when changing anything here.
+
 For both 4- and 5-level layouts, the STACKLEAK_POISON value in the last 2MB
 hole: ffffffffffff4111
