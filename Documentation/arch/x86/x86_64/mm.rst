@@ -107,7 +107,6 @@ Complete virtual memory map with 5-level page tables
    ffd2000000000000 |  -11.5  PB | ffd3ffffffffffff |  0.5 PB | ... unused hole
    ffd4000000000000 |  -11    PB | ffd5ffffffffffff |  0.5 PB | virtual memory map (vmemmap_base)
    ffd6000000000000 |  -10.5  PB | ffdeffffffffffff | 2.25 PB | ... unused hole
-                    |            |                  |         | vaddr_end for KASLR
    ffdf000000000000 |   -8.25 PB | fffffbffffffffff |   ~8 PB | KASAN shadow memory
   __________________|____________|__________________|_________|____________________________________________________________
                                                               |
@@ -115,6 +114,7 @@ Complete virtual memory map with 5-level page tables
   ____________________________________________________________|____________________________________________________________
                     |            |                  |         |
    fffffc0000000000 |   -4    TB | fffffdffffffffff |    2 TB | ... unused hole
+                    |            |                  |         | vaddr_end for KASLR
    fffffe0000000000 |   -2    TB | fffffe7fffffffff |  0.5 TB | cpu_entry_area mapping
    fffffe8000000000 |   -1.5  TB | fffffeffffffffff |  0.5 TB | ... unused hole
    ffffff0000000000 |   -1    TB | ffffff7fffffffff |  0.5 TB | %esp fixup stacks
@@ -155,9 +155,7 @@ in top 512G of address space.
 
 Be very careful vs. KASLR when changing anything here. The KASLR address
 range must not overlap with anything except the KASAN shadow area, which is
-correct as KASAN disables KASLR. In the 5-level layout, the end of KASLR range
-is the top 128TG of the address space, which is in the middle of KASAN shadow
-area, rather than the start of the 'cpu_entry_area' in the 4-level layout.
+correct as KASAN disables KASLR.
 
 Note that if the PVM hypervisor is enabled, the KASAN shadow area is used by
 the PVM hypervisor, so be very careful when changing anything here.
