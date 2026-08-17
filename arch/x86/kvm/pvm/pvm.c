@@ -26,6 +26,7 @@
 #include "trace.h"
 #include "x86.h"
 #include "pvm.h"
+#include "pvm_switcher.h"
 #include "mmu/spte.h"
 
 MODULE_AUTHOR("AntGroup");
@@ -660,6 +661,7 @@ static u64 get_switch_hw_cr3(struct vcpu_pvm *pvm)
 
 static void pvm_set_host_cr3_for_guest(struct vcpu_pvm *pvm)
 {
+	struct tss_extra *tss_ex = current_tss_extra();
 	u64 hw_cr3 = __sme_set(pvm->vcpu.arch.mmu->root.hpa);
 	u64 switch_hw_cr3 = get_switch_hw_cr3(pvm);
 	u64 enter_cr3 = hw_cr3;
@@ -691,14 +693,14 @@ static void pvm_set_host_cr3_for_guest(struct vcpu_pvm *pvm)
 		}
 	}
 
-	this_cpu_write(cpu_tss_rw.tss_ex.enter_cr3, enter_cr3);
+	tss_ex->enter_cr3 = enter_cr3;
 
 	if (is_smod(pvm)) {
-		this_cpu_write(cpu_tss_rw.tss_ex.smod_cr3, hw_cr3);
-		this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, switch_hw_cr3);
+		tss_ex->smod_cr3 = hw_cr3;
+		tss_ex->umod_cr3 = switch_hw_cr3;
 	} else {
-		this_cpu_write(cpu_tss_rw.tss_ex.umod_cr3, hw_cr3);
-		this_cpu_write(cpu_tss_rw.tss_ex.smod_cr3, switch_hw_cr3);
+		tss_ex->umod_cr3 = hw_cr3;
+		tss_ex->smod_cr3 = switch_hw_cr3;
 	}
 
 	if (switch_hw_cr3 != INVALID_PAGE)
@@ -709,13 +711,14 @@ static void pvm_set_host_cr3_for_guest(struct vcpu_pvm *pvm)
 
 static void pvm_set_host_cr3_for_hypervisor(struct vcpu_pvm *pvm)
 {
+	struct tss_extra *tss_ex = current_tss_extra();
 	unsigned long cr3;
 
 	if (static_cpu_has(X86_FEATURE_PCID))
 		cr3 = __get_current_cr3_fast() | X86_CR3_PCID_NOFLUSH;
 	else
 		cr3 = __get_current_cr3_fast();
-	this_cpu_write(cpu_tss_rw.tss_ex.host_cr3, cr3);
+	tss_ex->host_cr3 = cr3;
 }
 
 // Set tss_ex.host_cr3 for VMExit.
@@ -2473,7 +2476,7 @@ static __always_inline void load_regs(struct kvm_vcpu *vcpu, struct pt_regs *gue
 
 static noinstr void pvm_vcpu_run_noinstr(struct kvm_vcpu *vcpu)
 {
-	struct tss_extra *tss_ex = this_cpu_ptr(&cpu_tss_rw.tss_ex);
+	struct tss_extra *tss_ex = current_tss_extra();
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
 	struct pt_regs *sp0_regs = (struct pt_regs *)this_cpu_read(cpu_tss_rw.x86_tss.sp0) - 1;
 	struct pt_regs *ret_regs;
