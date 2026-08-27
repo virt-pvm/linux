@@ -40,7 +40,7 @@
 .section .noinstr.text, "ax"
 
 SYM_FUNC_START(kvm_do_host_nmi_irqoff)
-	KVM_DO_EVENT_IRQOFF call asm_exc_nmi_kvm
+	KVM_DO_EVENT_IRQOFF call asm_exc_nmi_kvm_vmx
 SYM_FUNC_END(kvm_do_host_nmi_irqoff)
 
 .section .text, "ax"
