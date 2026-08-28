@@ -33,11 +33,24 @@ kvm-amd-y		+= svm/svm_onhyperv.o
 endif
 
 kvm-pvm-y 		+= pvm/pvm.o pvm/host_mmu.o
+kvm-pvm-y 		+= pvm/entry_64_switcher.o
 
 obj-$(CONFIG_KVM_X86)	+= kvm.o
 obj-$(CONFIG_KVM_INTEL)	+= kvm-intel.o
 obj-$(CONFIG_KVM_AMD)	+= kvm-amd.o
 obj-$(CONFIG_KVM_PVM) 	+= kvm-pvm.o
+
+AFLAGS_pvm/entry_64_switcher.o := -DPVM_OOT_MODE -iquote $(obj)/pvm -I$(src)/pvm
+$(obj)/pvm/entry_64_switcher.o: $(obj)/pvm/asm-offsets.h
+
+$(obj)/pvm/asm-offsets.s: $(src)/pvm/asm-offsets.c FORCE
+	$(call if_changed_dep,cc_s_c)
+
+$(obj)/pvm/asm-offsets.h: $(obj)/pvm/asm-offsets.s FORCE
+	$(call filechk,offsets,__PVM_ASM_OFFSETS_H__)
+
+targets += pvm/asm-offsets.s
+clean-files += pvm/asm-offsets.h
 
 AFLAGS_svm/vmenter.o    := -iquote $(obj)
 $(obj)/svm/vmenter.o: $(obj)/kvm-asm-offsets.h

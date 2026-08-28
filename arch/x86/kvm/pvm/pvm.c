@@ -502,12 +502,10 @@ static void pvm_prepare_switch_to_guest(struct kvm_vcpu *vcpu)
 
 	kvm_set_user_return_msr(0, (u64)entry_SYSCALL_64_switcher, -1ull);
 	kvm_set_user_return_msr(1, pvm->msr_tsc_aux, -1ull);
-	if (ia32_enabled()) {
-		if (is_intel)
-			kvm_set_user_return_msr(2, GDT_ENTRY_INVALID_SEG, -1ull);
-		else
-			kvm_set_user_return_msr(2, (u64)entry_SYSCALL32_ignore, -1ull);
-	}
+	if (is_intel)
+		kvm_set_user_return_msr(2, GDT_ENTRY_INVALID_SEG, -1ull);
+	else
+		kvm_set_user_return_msr(2, (u64)entry_pvm_SYSCALL32_ignore, -1ull);
 }
 
 static void pvm_prepare_switch_to_host(struct vcpu_pvm *pvm)
@@ -2838,12 +2836,10 @@ static __init void pvm_setup_user_return_msrs(void)
 {
 	kvm_add_user_return_msr(MSR_LSTAR);
 	kvm_add_user_return_msr(MSR_TSC_AUX);
-	if (ia32_enabled()) {
-		if (is_intel)
-			kvm_add_user_return_msr(MSR_IA32_SYSENTER_CS);
-		else
-			kvm_add_user_return_msr(MSR_CSTAR);
-	}
+	if (is_intel)
+		kvm_add_user_return_msr(MSR_IA32_SYSENTER_CS);
+	else
+		kvm_add_user_return_msr(MSR_CSTAR);
 }
 
 static __init void pvm_set_cpu_caps(void)

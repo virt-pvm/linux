@@ -1,2 +1,4 @@
 /kvm-asm-offsets.s
 /kvm-asm-offsets.h
+/pvm/asm-offsets.s
+/pvm/asm-offsets.h

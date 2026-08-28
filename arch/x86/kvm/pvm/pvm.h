@@ -3,7 +3,7 @@
 #define __KVM_X86_PVM_H
 
 #include <linux/kvm_host.h>
-#include <asm/switcher.h>
+#include "switcher.h"
 
 /*
  * Extra switch flags:

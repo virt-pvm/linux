@@ -19,6 +19,7 @@
 #include "mmu.h"
 #include "mmu/spte.h"
 #include "pvm.h"
+#include "pvm_switcher.h"
 
 #define PT_L4_INDEX(address)	__PT_INDEX(address, 4, 9)
 #define PT_L5_INDEX(address)	__PT_INDEX(address, 5, 9)
@@ -84,7 +85,7 @@ static int __init guest_address_space_init(void)
 	return 0;
 }
 
-static __init void clone_host_mmu(u64 *spt, u64 *host, int index_start, int index_end)
+static void __init clone_host_mmu(u64 *spt, u64 *host, int index_start, int index_end)
 {
 	int i;
 
@@ -95,6 +96,27 @@ static __init void clone_host_mmu(u64 *spt, u64 *host, int index_start, int inde
 
 		/* remove userbit from host mmu, which also disable VSYSCALL page */
 		spt[i] = host[i] & ~(_PAGE_USER | SPTE_MMU_PRESENT_MASK);
+	}
+}
+
+unsigned long pvm_host_idt_entries[NR_VECTORS];
+
+static void __init oot_switcher_init(void)
+{
+	struct desc_ptr dt;
+	gate_desc *idt_base;
+	int i, cpu;
+
+	store_idt(&dt);
+	idt_base = (gate_desc *)dt.address;
+
+	for (i = 0; i < NR_VECTORS; i++)
+		pvm_host_idt_entries[i] = gate_offset(idt_base + i);
+
+	for_each_possible_cpu(cpu) {
+		struct tss_extra *tss_ex = per_cpu_tss_extra(cpu);
+
+		tss_ex->host_gs_base = cpu_kernelmode_gs_base(cpu);
 	}
 }
 
@@ -135,6 +157,8 @@ int __init host_mmu_init(void)
 	} else {
 		clone_host_mmu(host_mmu_root_pgd, host_pgd, pml4_index_start, pml4_index_end);
 	}
+
+	oot_switcher_init();
 
 	return 0;
 }
