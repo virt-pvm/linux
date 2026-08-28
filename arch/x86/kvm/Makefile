@@ -1,10 +1,24 @@
 # SPDX-License-Identifier: GPL-2.0
 
+ifneq ($(realpath $(src)),$(realpath $(srctree)/arch/x86/kvm))
+PVM_OOT_MODE := 1
+endif
+
+ifdef PVM_OOT_MODE
+ccflags-y += -I$(src)
+else
 ccflags-y += -I $(srctree)/arch/x86/kvm
+endif
 ccflags-$(CONFIG_KVM_WERROR) += -Werror
 
 ifeq ($(CONFIG_FRAME_POINTER),y)
 OBJECT_FILES_NON_STANDARD_vmenter.o := y
+endif
+
+ifdef PVM_OOT_MODE
+ccflags-y += -DPVM_OOT_MODE -DCONFIG_KVM_PVM
+LINUXINCLUDE := -I$(src)/include $(LINUXINCLUDE)
+obj-m += kvm-pvm.o
 endif
 
 include $(srctree)/virt/kvm/Makefile.kvm
