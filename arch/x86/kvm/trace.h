@@ -1879,7 +1879,11 @@ TRACE_EVENT(kvm_rmp_fault,
 #endif /* _TRACE_KVM_H */
 
 #undef TRACE_INCLUDE_PATH
+#ifdef PVM_OOT_MODE
+#define TRACE_INCLUDE_PATH .
+#else
 #define TRACE_INCLUDE_PATH ../../arch/x86/kvm
+#endif
 #undef TRACE_INCLUDE_FILE
 #define TRACE_INCLUDE_FILE trace
 
