@@ -18,6 +18,7 @@
 #include <asm/io_bitmap.h>
 #include <asm/pvm_para.h>
 #include <asm/mmu_context.h>
+#include <asm/traps.h>
 
 #include "cpuid.h"
 #include "lapic.h"
@@ -779,10 +780,10 @@ static void pvm_patch_hypercall(struct kvm_vcpu *vcpu, unsigned char *hypercall)
 	hypercall[2] = 0xCC;
 }
 
-static int pvm_check_emulate_instruction(struct kvm_vcpu *vcpu, int emul_type,
+static bool pvm_can_emulate_instruction(struct kvm_vcpu *vcpu, int emul_type,
 					 void *insn, int insn_len)
 {
-	return X86EMUL_CONTINUE;
+	return true;
 }
 
 static int skip_emulated_instruction(struct kvm_vcpu *vcpu)
@@ -2580,9 +2581,10 @@ static inline void pvm_load_host_xsave_state(struct kvm_vcpu *vcpu)
 	}
 }
 
-static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu)
+static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu, u64 run_flags)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	bool force_immediate_exit = run_flags & KVM_RUN_FORCE_IMMEDIATE_EXIT;
 	bool is_smod_befor_run = is_smod(pvm);
 
 	/*
@@ -2602,7 +2604,10 @@ static fastpath_t pvm_vcpu_run(struct kvm_vcpu *vcpu)
 		return EXIT_FASTPATH_NONE;
 	}
 
-	trace_kvm_entry(vcpu);
+	trace_kvm_entry(vcpu, force_immediate_exit);
+
+	if (force_immediate_exit)
+		return EXIT_FASTPATH_NONE;
 
 	pvm_load_guest_xsave_state(vcpu);
 
@@ -3096,7 +3101,6 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.check_intercept = pvm_check_intercept,
 	.handle_exit_irqoff = pvm_handle_exit_irqoff,
 
-	.request_immediate_exit = __kvm_request_immediate_exit,
 
 	.sched_in = pvm_sched_in,
 
@@ -3120,7 +3124,7 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.get_l2_tsc_multiplier = pvm_get_l2_tsc_multiplier,
 	.write_tsc_offset = pvm_write_tsc_offset,
 	.write_tsc_multiplier = pvm_write_tsc_multiplier,
-	.check_emulate_instruction = pvm_check_emulate_instruction,
+	.can_emulate_instruction = pvm_can_emulate_instruction,
 	.disallowed_va = pvm_disallowed_va,
 	.vcpu_gpc_refresh = pvm_vcpu_gpc_refresh,
 };

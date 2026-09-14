@@ -15,6 +15,7 @@
 #include <asm/vsyscall.h>
 #include <asm/pgtable.h>
 #include <asm/setup.h>
+#include <asm/traps.h>
 
 #include "mmu.h"
 #include "mmu/spte.h"
