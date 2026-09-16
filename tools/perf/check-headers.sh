@@ -50,6 +50,7 @@ FILES=(
   "arch/powerpc/include/uapi/asm/perf_regs.h"
   "arch/s390/include/uapi/asm/perf_regs.h"
   "arch/x86/include/uapi/asm/perf_regs.h"
+  "arch/x86/include/uapi/asm/pvm_trace.h"
   "arch/x86/include/uapi/asm/kvm.h"
   "arch/x86/include/uapi/asm/kvm_perf.h"
   "arch/x86/include/uapi/asm/svm.h"
