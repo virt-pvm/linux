@@ -1,0 +1,3 @@
+# Unified-diff context contains a leading space before native indentation.
+# prepare.py checks whitespace on the actual applied source changes instead.
+profiles/**/*.patch -whitespace

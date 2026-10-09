@@ -1,0 +1,218 @@
+From 3fbd00346832284eb81de1181842003cd1ea6aad Mon Sep 17 00:00:00 2001
+From: hky1999 <hukeyang.hky@antgroup.com>
+Date: Fri, 9 Oct 2026 22:54:49 +0800
+Subject: [PATCH] KVM: PVM: bridge target core-only exports to the OOT backend
+
+The host allows these exports to kvm.ko only. Export small GPL bridges
+from the replacement core and use explicit backend calls. Preserve
+noinstr and the host IBPB feature condition. Do not change the host
+export allowlist or module version checks.
+
+Signed-off-by: hky1999 <hukeyang.hky@antgroup.com>
+---
+ arch/x86/kvm/Makefile           |  6 ++++
+ arch/x86/kvm/include/asm/fred.h | 14 ++++++++++
+ arch/x86/kvm/pvm/host_mmu.c     |  5 ++--
+ arch/x86/kvm/pvm/oot_compat.c   | 49 +++++++++++++++++++++++++++++++++
+ arch/x86/kvm/pvm/oot_compat.h   | 12 ++++++++
+ arch/x86/kvm/pvm/pvm.c          | 13 +++++----
+ 6 files changed, 91 insertions(+), 8 deletions(-)
+ create mode 100644 arch/x86/kvm/include/asm/fred.h
+ create mode 100644 arch/x86/kvm/pvm/oot_compat.c
+ create mode 100644 arch/x86/kvm/pvm/oot_compat.h
+
+diff --git a/arch/x86/kvm/Makefile b/arch/x86/kvm/Makefile
+index b6022ed..399d0ab 100644
+--- a/arch/x86/kvm/Makefile
++++ b/arch/x86/kvm/Makefile
+@@ -53,6 +53,12 @@ endif
+ kvm-pvm-y 		+= pvm/pvm.o pvm/host_mmu.o
+ kvm-pvm-y 		+= pvm/entry_64_switcher.o
+ 
++ifdef PVM_OOT_MODE
++kvm-y += pvm/oot_compat.o
++CFLAGS_pvm/pvm.o += -DPVM_OOT_BACKEND
++CFLAGS_pvm/host_mmu.o += -DPVM_OOT_BACKEND
++endif
++
+ obj-$(CONFIG_KVM_X86)	+= kvm.o
+ ifndef PVM_OOT_MODE
+ obj-$(CONFIG_KVM_INTEL)	+= kvm-intel.o
+diff --git a/arch/x86/kvm/include/asm/fred.h b/arch/x86/kvm/include/asm/fred.h
+new file mode 100644
+index 0000000..6253306
+--- /dev/null
++++ b/arch/x86/kvm/include/asm/fred.h
+@@ -0,0 +1,14 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef PVM_OOT_ASM_FRED_H
++#define PVM_OOT_ASM_FRED_H
++/* Host inline helpers also call this core-only export. Scope the redirect
++ * to backend objects and to this header; the bridge must call the host.
++ */
++#ifdef PVM_OOT_BACKEND
++#define asm_fred_entry_from_kvm pvm_oot_fred_entry_from_kvm
++#endif
++#include_next <asm/fred.h>
++#ifdef PVM_OOT_BACKEND
++#undef asm_fred_entry_from_kvm
++#endif
++#endif
+diff --git a/arch/x86/kvm/pvm/host_mmu.c b/arch/x86/kvm/pvm/host_mmu.c
+index 926d9ec..300f808 100644
+--- a/arch/x86/kvm/pvm/host_mmu.c
++++ b/arch/x86/kvm/pvm/host_mmu.c
+@@ -20,6 +20,7 @@
+ #include "mmu/spte.h"
+ #include "pvm.h"
+ #include "pvm_switcher.h"
++#include "oot_compat.h"
+ 
+ #define PT_L4_INDEX(address)	__PT_INDEX(address, 4, 9)
+ #define PT_L5_INDEX(address)	__PT_INDEX(address, 5, 9)
+@@ -136,10 +137,10 @@ static bool __init clone_level(u64 *parent, u64 idx, u64 **new_child)
+ 	return true;
+ }
+ 
+-/* __flush_tlb_all() is exported symbol but flush_tlb_all() is not. */
++/* pvm_oot_flush_tlb_all() is exported symbol but flush_tlb_all() is not. */
+ static void do_flush_tlb_all(void *info)
+ {
+-	__flush_tlb_all();
++	pvm_oot_flush_tlb_all();
+ }
+ 
+ static void pvm_flush_tlb_all(void)
+diff --git a/arch/x86/kvm/pvm/oot_compat.c b/arch/x86/kvm/pvm/oot_compat.c
+new file mode 100644
+index 0000000..ba4d18e
+--- /dev/null
++++ b/arch/x86/kvm/pvm/oot_compat.c
+@@ -0,0 +1,49 @@
++// SPDX-License-Identifier: GPL-2.0
++#include <linux/module.h>
++#include "oot_compat.h"
++
++#include <asm/fred.h>
++#include <asm/kvm_para.h>
++#include <asm/mmu_context.h>
++#include <asm/nospec-branch.h>
++#include <asm/processor.h>
++#include <asm/tlbflush.h>
++
++/* Keep calls made between guest-state enter/exit free of instrumentation. */
++u32 noinstr pvm_oot_read_and_reset_apf_flags(void)
++{
++	return kvm_read_and_reset_apf_flags();
++}
++EXPORT_SYMBOL_GPL(pvm_oot_read_and_reset_apf_flags);
++
++void noinstr pvm_oot_indirect_branch_prediction_barrier(void)
++{
++	indirect_branch_prediction_barrier();
++}
++EXPORT_SYMBOL_GPL(pvm_oot_indirect_branch_prediction_barrier);
++
++void noinstr pvm_oot_flush_tlb_all(void)
++{
++	__flush_tlb_all();
++}
++EXPORT_SYMBOL_GPL(pvm_oot_flush_tlb_all);
++
++void noinstr pvm_oot_current_save_fsgs(void)
++{
++	current_save_fsgs();
++}
++EXPORT_SYMBOL_GPL(pvm_oot_current_save_fsgs);
++
++unsigned long noinstr pvm_oot_get_current_cr3_fast(void)
++{
++	return __get_current_cr3_fast();
++}
++EXPORT_SYMBOL_GPL(pvm_oot_get_current_cr3_fast);
++
++#ifdef CONFIG_X86_FRED
++void noinstr pvm_oot_fred_entry_from_kvm(struct fred_ss ss)
++{
++	asm_fred_entry_from_kvm(ss);
++}
++EXPORT_SYMBOL_GPL(pvm_oot_fred_entry_from_kvm);
++#endif
+diff --git a/arch/x86/kvm/pvm/oot_compat.h b/arch/x86/kvm/pvm/oot_compat.h
+new file mode 100644
+index 0000000..b3ce62c
+--- /dev/null
++++ b/arch/x86/kvm/pvm/oot_compat.h
+@@ -0,0 +1,12 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef PVM_OOT_KVM_SYMBOL_BRIDGES_H
++#define PVM_OOT_KVM_SYMBOL_BRIDGES_H
++#include <linux/types.h>
++struct fred_ss;
++u32 pvm_oot_read_and_reset_apf_flags(void);
++void pvm_oot_indirect_branch_prediction_barrier(void);
++void pvm_oot_flush_tlb_all(void);
++void pvm_oot_current_save_fsgs(void);
++unsigned long pvm_oot_get_current_cr3_fast(void);
++void pvm_oot_fred_entry_from_kvm(struct fred_ss ss);
++#endif
+diff --git a/arch/x86/kvm/pvm/pvm.c b/arch/x86/kvm/pvm/pvm.c
+index e73475c..624f6fa 100644
+--- a/arch/x86/kvm/pvm/pvm.c
++++ b/arch/x86/kvm/pvm/pvm.c
+@@ -27,6 +27,7 @@
+ #include "x86.h"
+ #include "pvm.h"
+ #include "pvm_switcher.h"
++#include "oot_compat.h"
+ #include "mmu/spte.h"
+ 
+ MODULE_AUTHOR("AntGroup");
+@@ -385,7 +386,7 @@ static void segments_save_host_and_switch_to_guest(struct vcpu_pvm *pvm)
+ 	/* Save host segments */
+ 	savesegment(ds, pvm->host_ds_sel);
+ 	savesegment(es, pvm->host_es_sel);
+-	current_save_fsgs();
++	pvm_oot_current_save_fsgs();
+ 
+ 	/* Load guest segments */
+ 	pvm_ds_sel = pvm->segments[VCPU_SREG_DS].selector;
+@@ -550,7 +551,7 @@ static DEFINE_PER_CPU(struct pvm_asid_data, pvm_asid);
+ 
+ static void __pvm_hwtlb_flush_all(void)
+ {
+-	__flush_tlb_all();
++	pvm_oot_flush_tlb_all();
+ }
+ 
+ static void update_asid(struct vcpu_pvm *pvm)
+@@ -713,9 +714,9 @@ static void pvm_set_host_cr3_for_hypervisor(struct vcpu_pvm *pvm)
+ 	unsigned long cr3;
+ 
+ 	if (static_cpu_has(X86_FEATURE_PCID))
+-		cr3 = __get_current_cr3_fast() | X86_CR3_PCID_NOFLUSH;
++		cr3 = pvm_oot_get_current_cr3_fast() | X86_CR3_PCID_NOFLUSH;
+ 	else
+-		cr3 = __get_current_cr3_fast();
++		cr3 = pvm_oot_get_current_cr3_fast();
+ 	tss_ex->host_cr3 = cr3;
+ }
+ 
+@@ -755,7 +756,7 @@ static void pvm_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
+ 	if (vcpu->cpu != cpu)
+ 		pvm_flush_hwtlb(vcpu);
+ 
+-	indirect_branch_prediction_barrier();
++	pvm_oot_indirect_branch_prediction_barrier();
+ }
+ 
+ static void pvm_vcpu_put(struct kvm_vcpu *vcpu)
+@@ -2522,7 +2523,7 @@ static noinstr void pvm_vcpu_run_noinstr(struct kvm_vcpu *vcpu)
+ 	case PF_VECTOR:
+ 		// if the exit due to #PF, check for async #PF.
+ 		pvm->exit_cr2 = read_cr2();
+-		vcpu->arch.apf.host_apf_flags = kvm_read_and_reset_apf_flags();
++		vcpu->arch.apf.host_apf_flags = pvm_oot_read_and_reset_apf_flags();
+ 		break;
+ 	case NMI_VECTOR:
+ 		kvm_do_nmi_irqoff(vcpu);
