@@ -114,7 +114,7 @@ SYM_FUNC_END(switcher_enter_guest)
 	 * Change top bits to match most significant bit (47th or 56th bit
 	 * depending on paging mode) in the address.
 	 */
-#ifdef CONFIG_X86_5LEVEL
+#if defined(CONFIG_X86_5LEVEL) || CONFIG_PGTABLE_LEVELS == 5
 	ALTERNATIVE "shl $(64 - 48), %rcx; sar $(64 - 48), %rcx", \
 		    "shl $(64 - 57), %rcx; sar $(64 - 57), %rcx", X86_FEATURE_LA57
 #else

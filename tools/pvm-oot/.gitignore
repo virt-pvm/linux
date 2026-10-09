@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+# The kernel's root ignore rules exclude patch-management files by default.
+!profiles/**/*.patch
+!profiles/**/series

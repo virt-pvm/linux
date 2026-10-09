@@ -1,0 +1,26 @@
+From 7177e5552f09215608c2335d580dc44f3683df98 Mon Sep 17 00:00:00 2001
+From: hky1999 <hukeyang.hky@antgroup.com>
+Date: Fri, 9 Oct 2026 22:54:49 +0800
+Subject: [PATCH 4/5] KVM: pass the eventfd to target IRQ-bypass registration
+
+The host owns the consumer eventfd field. Let registration populate it
+and retain the existing eventfd lifetime and teardown.
+
+Signed-off-by: hky1999 <hukeyang.hky@antgroup.com>
+---
+ virt/kvm/irqbypass.h | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/virt/kvm/irqbypass.h b/virt/kvm/irqbypass.h
+index 0424959..b32e367 100644
+--- a/virt/kvm/irqbypass.h
++++ b/virt/kvm/irqbypass.h
+@@ -6,7 +6,6 @@
+ static inline int kvm_irq_bypass_register_consumer(
+ 	struct irq_bypass_consumer *consumer, void *token)
+ {
+-	consumer->token = token;
+-	return irq_bypass_register_consumer(consumer);
++	return irq_bypass_register_consumer(consumer, token);
+ }
+ #endif

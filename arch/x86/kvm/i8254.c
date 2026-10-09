@@ -38,6 +38,7 @@
 #include "ioapic.h"
 #include "irq.h"
 #include "i8254.h"
+#include "hrtimer.h"
 #include "x86.h"
 
 #ifndef CONFIG_X86_64
@@ -690,8 +691,8 @@ struct kvm_pit *kvm_create_pit(struct kvm *kvm, u32 flags)
 	pit->kvm = kvm;
 
 	pit_state = &pit->pit_state;
-	hrtimer_init(&pit_state->timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
-	pit_state->timer.function = pit_timer_fn;
+	kvm_hrtimer_init(&pit_state->timer, CLOCK_MONOTONIC,
+			 HRTIMER_MODE_ABS, pit_timer_fn);
 
 	pit_state->irq_ack_notifier.gsi = 0;
 	pit_state->irq_ack_notifier.irq_acked = kvm_pit_ack_irq;

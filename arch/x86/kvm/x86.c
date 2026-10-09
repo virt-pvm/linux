@@ -13612,7 +13612,7 @@ void kvm_arch_irq_bypass_del_producer(struct irq_bypass_consumer *cons,
 					   prod->irq, irqfd->gsi, 0);
 	if (ret)
 		printk(KERN_INFO "irq bypass consumer (token %p) unregistration"
-		       " fails: %d\n", irqfd->consumer.token, ret);
+		       " fails: %d\n", irqfd->eventfd, ret);
 
 	spin_unlock_irq(&kvm->irqfds.lock);
 
