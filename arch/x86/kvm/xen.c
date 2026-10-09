@@ -11,6 +11,7 @@
 #include "xen.h"
 #include "hyperv.h"
 #include "lapic.h"
+#include "hrtimer.h"
 
 #include <linux/eventfd.h>
 #include <linux/kvm_host.h>
@@ -168,9 +169,8 @@ static void kvm_xen_stop_timer(struct kvm_vcpu *vcpu)
 
 static void kvm_xen_init_timer(struct kvm_vcpu *vcpu)
 {
-	hrtimer_init(&vcpu->arch.xen.timer, CLOCK_MONOTONIC,
-		     HRTIMER_MODE_ABS_HARD);
-	vcpu->arch.xen.timer.function = xen_timer_callback;
+	kvm_hrtimer_init(&vcpu->arch.xen.timer, CLOCK_MONOTONIC,
+			 HRTIMER_MODE_ABS_HARD, xen_timer_callback);
 }
 
 static void kvm_xen_update_runstate_guest(struct kvm_vcpu *v, bool atomic)

@@ -22,7 +22,7 @@
 #include <linux/mm.h>
 #include <linux/highmem.h>
 #include <linux/smp.h>
-#include <linux/hrtimer.h>
+#include "hrtimer.h"
 #include <linux/io.h>
 #include <linux/export.h>
 #include <linux/math64.h>
@@ -102,7 +102,7 @@ static __always_inline void kvm_lapic_set_reg64(struct kvm_lapic *apic,
 	__kvm_lapic_set_reg64(apic->regs, reg, val);
 }
 
-static inline int apic_test_vector(int vec, void *bitmap)
+static inline int kvm_apic_test_vector(int vec, void *bitmap)
 {
 	return test_bit(VEC_POS(vec), (bitmap) + REG_POS(vec));
 }
@@ -111,8 +111,8 @@ bool kvm_apic_pending_eoi(struct kvm_vcpu *vcpu, int vector)
 {
 	struct kvm_lapic *apic = vcpu->arch.apic;
 
-	return apic_test_vector(vector, apic->regs + APIC_ISR) ||
-		apic_test_vector(vector, apic->regs + APIC_IRR);
+	return kvm_apic_test_vector(vector, apic->regs + APIC_ISR) ||
+		kvm_apic_test_vector(vector, apic->regs + APIC_IRR);
 }
 
 static inline int __apic_test_and_set_vector(int vec, void *bitmap)
@@ -1327,7 +1327,7 @@ static int __apic_accept_irq(struct kvm_lapic *apic, int delivery_mode,
 			dest_map->vectors[vcpu->vcpu_id] = vector;
 		}
 
-		if (apic_test_vector(vector, apic->regs + APIC_TMR) != !!trig_mode) {
+		if (kvm_apic_test_vector(vector, apic->regs + APIC_TMR) != !!trig_mode) {
 			if (trig_mode)
 				kvm_lapic_set_vector(vector,
 						     apic->regs + APIC_TMR);
@@ -1465,7 +1465,7 @@ static void kvm_ioapic_send_eoi(struct kvm_lapic *apic, int vector)
 		return;
 	}
 
-	if (apic_test_vector(vector, apic->regs + APIC_TMR))
+	if (kvm_apic_test_vector(vector, apic->regs + APIC_TMR))
 		trigger_mode = IOAPIC_LEVEL_TRIG;
 	else
 		trigger_mode = IOAPIC_EDGE_TRIG;
@@ -1798,7 +1798,7 @@ static bool lapic_timer_int_injected(struct kvm_vcpu *vcpu)
 		if (apic->apicv_active)
 			bitmap = apic->regs + APIC_IRR;
 
-		if (apic_test_vector(vec, bitmap))
+		if (kvm_apic_test_vector(vec, bitmap))
 			return true;
 	}
 	return false;
@@ -2903,9 +2903,8 @@ int kvm_create_lapic(struct kvm_vcpu *vcpu, int timer_advance_ns)
 
 	apic->nr_lvt_entries = kvm_apic_calc_nr_lvt_entries(vcpu);
 
-	hrtimer_init(&apic->lapic_timer.timer, CLOCK_MONOTONIC,
-		     HRTIMER_MODE_ABS_HARD);
-	apic->lapic_timer.timer.function = apic_timer_fn;
+	kvm_hrtimer_init(&apic->lapic_timer.timer, CLOCK_MONOTONIC,
+			 HRTIMER_MODE_ABS_HARD, apic_timer_fn);
 	if (timer_advance_ns == -1) {
 		apic->lapic_timer.timer_advance_ns = LAPIC_TIMER_ADVANCE_NS_INIT;
 		lapic_timer_advance_dynamic = true;

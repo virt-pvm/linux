@@ -21,7 +21,11 @@ LINUXINCLUDE := -I$(src)/include $(LINUXINCLUDE)
 obj-m += kvm-pvm.o
 endif
 
+ifdef PVM_OOT_MODE
+include $(src)/../../../virt/kvm/Makefile.kvm
+else
 include $(srctree)/virt/kvm/Makefile.kvm
+endif
 
 kvm-y			+= x86.o emulate.o i8259.o irq.o lapic.o host_entry.o \
 			   i8254.o ioapic.o irq_comm.o cpuid.o pmu.o mtrr.o \
@@ -55,8 +59,10 @@ kvm-pvm-y 		+= pvm/pvm.o pvm/host_mmu.o
 kvm-pvm-y 		+= pvm/entry_64_switcher.o
 
 obj-$(CONFIG_KVM)	+= kvm.o
+ifndef PVM_OOT_MODE
 obj-$(CONFIG_KVM_INTEL)	+= kvm-intel.o
 obj-$(CONFIG_KVM_AMD)	+= kvm-amd.o
+endif
 obj-$(CONFIG_KVM_PVM) 	+= kvm-pvm.o
 
 AFLAGS_pvm/entry_64_switcher.o := -DPVM_OOT_MODE -iquote $(obj)/pvm -I$(src)/pvm
