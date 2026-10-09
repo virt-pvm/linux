@@ -5682,11 +5682,7 @@ static void kvm_resume(void)
 	WARN_ON_ONCE(kvm_enable_virtualization_cpu());
 }
 
-static struct syscore_ops kvm_syscore_ops = {
-	.suspend = kvm_suspend,
-	.resume = kvm_resume,
-	.shutdown = kvm_shutdown,
-};
+#include "syscore.h"
 
 static int kvm_enable_virtualization(void)
 {
@@ -5704,7 +5700,7 @@ static int kvm_enable_virtualization(void)
 	if (r)
 		goto err_cpuhp;
 
-	register_syscore_ops(&kvm_syscore_ops);
+	kvm_register_syscore();
 
 	/*
 	 * Undo virtualization enabling and bail if the system is going down.
@@ -5726,7 +5722,7 @@ static int kvm_enable_virtualization(void)
 	return 0;
 
 err_rebooting:
-	unregister_syscore_ops(&kvm_syscore_ops);
+	kvm_unregister_syscore();
 	cpuhp_remove_state(CPUHP_AP_KVM_ONLINE);
 err_cpuhp:
 	kvm_arch_disable_virtualization();
@@ -5741,7 +5737,7 @@ static void kvm_disable_virtualization(void)
 	if (--kvm_usage_count)
 		return;
 
-	unregister_syscore_ops(&kvm_syscore_ops);
+	kvm_unregister_syscore();
 	cpuhp_remove_state(CPUHP_AP_KVM_ONLINE);
 	kvm_arch_disable_virtualization();
 }
