@@ -1,0 +1,131 @@
+diff --git a/arch/x86/kvm/hyperv.c b/arch/x86/kvm/hyperv.c
+index feaea83e6e0bb1308f99296d3d5b24088b4438f1..391bd4ccb22746aad12f37376480f267eec51545 100644
+--- a/arch/x86/kvm/hyperv.c
++++ b/arch/x86/kvm/hyperv.c
+@@ -2400,7 +2400,7 @@ static u16 kvm_hvcall_signal_event(struct kvm_vcpu *vcpu, struct kvm_hv_hcall *h
+ 	if (!eventfd)
+ 		return HV_STATUS_INVALID_PORT_ID;
+ 
+-	eventfd_signal(eventfd, 1);
++	eventfd_signal(eventfd);
+ 	return HV_STATUS_SUCCESS;
+ }
+ 
+diff --git a/arch/x86/kvm/include/linux/kvm_host.h b/arch/x86/kvm/include/linux/kvm_host.h
+index 91ec88d52df14644caf8654bfb966c013a3b91e9..db3baf297381c54b977950920f48f9bd1ba38ce9 100644
+--- a/arch/x86/kvm/include/linux/kvm_host.h
++++ b/arch/x86/kvm/include/linux/kvm_host.h
+@@ -1,5 +1,7 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+ #ifndef __PVM_OOT_WRAPPER_ARCH_X86_KVM_INCLUDE_LINUX_KVM_HOST_H__
+ #define __PVM_OOT_WRAPPER_ARCH_X86_KVM_INCLUDE_LINUX_KVM_HOST_H__
++#define CONFIG_HAVE_KVM_EVENTFD 1
++#define CONFIG_HAVE_KVM_IRQFD 1
+ #include "../../../../../include/linux/kvm_host.h"
+ #endif
+diff --git a/arch/x86/kvm/include/trace/events/kvm.h b/arch/x86/kvm/include/trace/events/kvm.h
+index acb226471c6df94b000a3c6ecf8028df4206e593..4959763af49a45be0f1097b8639d1862e3c7710d 100644
+--- a/arch/x86/kvm/include/trace/events/kvm.h
++++ b/arch/x86/kvm/include/trace/events/kvm.h
+@@ -1,2 +1,3 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+ #include "../../../../../../include/trace/events/kvm.h"
++#define trace_kvm_set_irq(irq, level, source_id) do { } while (0)
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index 96f19dc6b29b66e5357936876b6218a3dc9903b5..74d65b97246365e13214f91b1e1ea1476e375e6c 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -6861,11 +6861,7 @@ static unsigned long mmu_shrink_count(struct shrinker *shrink,
+ 	return percpu_counter_read_positive(&kvm_total_used_mmu_pages);
+ }
+ 
+-static struct shrinker mmu_shrinker = {
+-	.count_objects = mmu_shrink_count,
+-	.scan_objects = mmu_shrink_scan,
+-	.seeks = DEFAULT_SEEKS * 10,
+-};
++static struct shrinker *mmu_shrinker;
+ 
+ static void mmu_destroy_caches(void)
+ {
+@@ -6998,10 +6994,16 @@ int kvm_mmu_vendor_module_init(void)
+ 	if (percpu_counter_init(&kvm_total_used_mmu_pages, 0, GFP_KERNEL))
+ 		goto out;
+ 
+-	ret = register_shrinker(&mmu_shrinker, "x86-mmu");
+-	if (ret)
++	mmu_shrinker = shrinker_alloc(0, "x86-mmu");
++	if (!mmu_shrinker)
+ 		goto out_shrinker;
+ 
++	mmu_shrinker->count_objects = mmu_shrink_count;
++	mmu_shrinker->scan_objects = mmu_shrink_scan;
++	mmu_shrinker->seeks = DEFAULT_SEEKS * 10;
++
++	shrinker_register(mmu_shrinker);
++
+ 	return 0;
+ 
+ out_shrinker:
+@@ -7023,7 +7025,7 @@ void kvm_mmu_vendor_module_exit(void)
+ {
+ 	mmu_destroy_caches();
+ 	percpu_counter_destroy(&kvm_total_used_mmu_pages);
+-	unregister_shrinker(&mmu_shrinker);
++	shrinker_free(mmu_shrinker);
+ }
+ 
+ /*
+diff --git a/arch/x86/kvm/xen.c b/arch/x86/kvm/xen.c
+index 45260b47af78c68fbdb04a01b589634475489490..5e812d5aa9aa13bd68d7508b3f1cb97c9aaa9b51 100644
+--- a/arch/x86/kvm/xen.c
++++ b/arch/x86/kvm/xen.c
+@@ -2054,7 +2054,7 @@ static bool kvm_xen_hcall_evtchn_send(struct kvm_vcpu *vcpu, u64 param, u64 *r)
+ 		if (ret < 0 && ret != -ENOTCONN)
+ 			return false;
+ 	} else {
+-		eventfd_signal(evtchnfd->deliver.eventfd.ctx, 1);
++		eventfd_signal(evtchnfd->deliver.eventfd.ctx);
+ 	}
+ 
+ 	*r = 0;
+diff --git a/virt/kvm/eventfd.c b/virt/kvm/eventfd.c
+index 10a657cf333ed5562cd02252d997a34cb44e9ad6..db4137575d3e198c3cdbe30ffe5a42370da1c90e 100644
+--- a/virt/kvm/eventfd.c
++++ b/virt/kvm/eventfd.c
+@@ -61,7 +61,7 @@ static void irqfd_resampler_notify(struct kvm_kernel_irqfd_resampler *resampler)
+ 
+ 	list_for_each_entry_srcu(irqfd, &resampler->list, resampler_link,
+ 				 srcu_read_lock_held(&resampler->kvm->irq_srcu))
+-		eventfd_signal(irqfd->resamplefd, 1);
++		eventfd_signal(irqfd->resamplefd);
+ }
+ 
+ /*
+@@ -791,7 +791,7 @@ ioeventfd_write(struct kvm_vcpu *vcpu, struct kvm_io_device *this, gpa_t addr,
+ 	if (!ioeventfd_in_range(p, addr, len, val))
+ 		return -EOPNOTSUPP;
+ 
+-	eventfd_signal(p->eventfd, 1);
++	eventfd_signal(p->eventfd);
+ 	return 0;
+ }
+ 
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index 5168ae3c5ee83b0813cf5f51c1468c072156b823..578240becd79b7636144b4fac2b67facf4a46977 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -5146,11 +5146,13 @@ static long kvm_dev_ioctl(struct file *filp,
+ 		r += PAGE_SIZE;    /* coalesced mmio ring page */
+ #endif
+ 		break;
++#ifdef KVM_TRACE_ENABLE
+ 	case KVM_TRACE_ENABLE:
+ 	case KVM_TRACE_PAUSE:
+ 	case KVM_TRACE_DISABLE:
+ 		r = -EOPNOTSUPP;
+ 		break;
++#endif
+ 	default:
+ 		return kvm_arch_dev_ioctl(filp, ioctl, arg);
+ 	}

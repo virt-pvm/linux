@@ -1,5 +1,0 @@
-0001-KVM-PVM-adapt-host-headers-and-config-for-Ubuntu-7.0.patch
-0002-KVM-use-the-target-hrtimer-setup-API.patch
-0003-KVM-adapt-syscore-registration-to-the-target-API.patch
-0004-KVM-pass-the-eventfd-to-target-IRQ-bypass-registrati.patch
-0005-KVM-PVM-bridge-target-core-only-exports-to-the-OOT-b.patch

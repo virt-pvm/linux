@@ -1,0 +1,35 @@
+{
+  "format": 1,
+  "name": "ubuntu-24.04-6.8.0-139-generic",
+  "source": {
+    "repository": "https://github.com/virt-pvm/linux.git",
+    "commit": "81ef364558b11440e497cbc624ea3ece27196aa5",
+    "upstream_base": "b4fc985ab6130cdc539eb2ba0f7e9786e8e1755f",
+    "export_roots": [
+      "arch/x86/kvm",
+      "arch/x86/include",
+      "include",
+      "virt/kvm",
+      "Documentation/virt/kvm/pvm-oot.rst"
+    ],
+    "export_tree_sha256": "dc925f7974f2e3cd90b912cdf7d27b0ed03c1f9ad8daa3e68f93cbbfe0725ac8"
+  },
+  "patches": [
+    {
+      "file": "0001-KVM-PVM-adapt-to-Ubuntu-24.04-6.8.0-139.patch",
+      "sha256": "9708c47153b7539742fe9394df824e0e3d3a714ec745d2f3c16c4f497d580a9a"
+    }
+  ],
+  "target": {
+    "distribution": "Ubuntu 24.04 LTS",
+    "architecture": "x86_64",
+    "kernel_release": "6.8.0-139-generic",
+    "compiler_version": "gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "files_sha256": {
+      ".config": "a5debe1362156decce8c37181c3bbed212fb6b976a7bce481bb22cadb1dee48d",
+      "Module.symvers": "1ad7cc7790b0086d80f075ba95476fd886771796cf61e6547ce28e4da28f9eca",
+      "include/generated/utsrelease.h": "0ea48cb9d2e093a63f4db03149cfb873063daeaf8829bced33364b699455d494"
+    }
+  },
+  "qualification": "candidate; requalification required after any source, patch or target change"
+}

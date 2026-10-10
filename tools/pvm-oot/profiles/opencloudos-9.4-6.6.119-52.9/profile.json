@@ -1,0 +1,35 @@
+{
+  "format": 1,
+  "name": "opencloudos-9.4-6.6.119-52.9.oc9.x86_64",
+  "source": {
+    "repository": "https://github.com/virt-pvm/linux.git",
+    "commit": "2b93c344e689377881e4c41fa2ffa34b89b75b7c",
+    "upstream_base": "b4fc985ab6130cdc539eb2ba0f7e9786e8e1755f",
+    "export_roots": [
+      "arch/x86/kvm",
+      "arch/x86/include",
+      "include",
+      "virt/kvm",
+      "Documentation/virt/kvm/pvm-oot.rst"
+    ],
+    "export_tree_sha256": "f9a3db531e4ba4f8985db72a93b7325ad88c43306e8f087feb39d2542f0462be"
+  },
+  "patches": [
+    {
+      "file": "0001-KVM-PVM-Adapt-OOT-to-OpenCloudOS-9.4-6.6.119.patch",
+      "sha256": "b094060366e52787faca9a792eb4c3295f2e3c9e83e44928d48b318bc7b19527"
+    }
+  ],
+  "target": {
+    "distribution": "OpenCloudOS 9.4",
+    "architecture": "x86_64",
+    "kernel_release": "6.6.119-52.9.oc9.x86_64",
+    "compiler_version": "gcc (Tencent Compiler 12.3.1.8) 12.3.1 20230912 (OpenCloudOS 12.3.1.8-8)",
+    "files_sha256": {
+      ".config": "8d79f00bb114e14136971d9f80476fae70393dafb47af83859e02e84bd52e65a",
+      "Module.symvers": "014350d82471eb4d1b78c841598865d227d93882c4db097a124eb1b52bacd45c",
+      "include/generated/utsrelease.h": "17b2d711bab87fee77082fa5ccbfd5c43ef139b35ce5d0802a181e468f8cecdb"
+    }
+  },
+  "qualification": "candidate; requalification required after any source, patch or target change"
+}

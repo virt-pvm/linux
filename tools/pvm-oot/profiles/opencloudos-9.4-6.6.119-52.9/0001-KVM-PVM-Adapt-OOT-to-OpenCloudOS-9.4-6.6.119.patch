@@ -1,0 +1,91 @@
+From cc54866da10a6f37f888839c3b8676bcc20879ae Mon Sep 17 00:00:00 2001
+Message-ID: <cc54866da10a6f37f888839c3b8676bcc20879ae.1792576725.git.houwenlong.hwl@antgroup.com>
+From: Hou Wenlong <houwenlong.hwl@antgroup.com>
+Date: Wed, 21 Oct 2026 17:58:21 +0800
+Subject: [PATCH 1/1] KVM: PVM: Adapt OOT to OpenCloudOS 9.4 6.6.119
+
+Use the shrinker allocation API and the available CPUID and exit-mask definitions in the OpenCloudOS 9.4 kernel headers.
+
+Signed-off-by: Hou Wenlong <houwenlong.hwl@antgroup.com>
+---
+ arch/x86/kvm/mmu/mmu.c       | 21 ++++++++++++---------
+ arch/x86/kvm/reverse_cpuid.h |  1 -
+ arch/x86/kvm/x86.c           |  5 ++++-
+ 3 files changed, 16 insertions(+), 11 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index 96f19dc6b29b..57269b66cc1b 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -6861,11 +6861,7 @@ static unsigned long mmu_shrink_count(struct shrinker *shrink,
+ 	return percpu_counter_read_positive(&kvm_total_used_mmu_pages);
+ }
+ 
+-static struct shrinker mmu_shrinker = {
+-	.count_objects = mmu_shrink_count,
+-	.scan_objects = mmu_shrink_scan,
+-	.seeks = DEFAULT_SEEKS * 10,
+-};
++static struct shrinker *mmu_shrinker;
+ 
+ static void mmu_destroy_caches(void)
+ {
+@@ -6998,9 +6994,16 @@ int kvm_mmu_vendor_module_init(void)
+ 	if (percpu_counter_init(&kvm_total_used_mmu_pages, 0, GFP_KERNEL))
+ 		goto out;
+ 
+-	ret = register_shrinker(&mmu_shrinker, "x86-mmu");
+-	if (ret)
++	mmu_shrinker = shrinker_alloc(0, "x86-mmu");
++	if (!mmu_shrinker) {
++		ret = -ENOMEM;
+ 		goto out_shrinker;
++	}
++
++	mmu_shrinker->count_objects = mmu_shrink_count;
++	mmu_shrinker->scan_objects = mmu_shrink_scan;
++	mmu_shrinker->seeks = DEFAULT_SEEKS * 10;
++	shrinker_register(mmu_shrinker);
+ 
+ 	return 0;
+ 
+@@ -7021,9 +7024,9 @@ void kvm_mmu_destroy(struct kvm_vcpu *vcpu)
+ 
+ void kvm_mmu_vendor_module_exit(void)
+ {
+-	mmu_destroy_caches();
++	shrinker_free(mmu_shrinker);
+ 	percpu_counter_destroy(&kvm_total_used_mmu_pages);
+-	unregister_shrinker(&mmu_shrinker);
++	mmu_destroy_caches();
+ }
+ 
+ /*
+diff --git a/arch/x86/kvm/reverse_cpuid.h b/arch/x86/kvm/reverse_cpuid.h
+index be23712354bd..64a0cf5588d6 100644
+--- a/arch/x86/kvm/reverse_cpuid.h
++++ b/arch/x86/kvm/reverse_cpuid.h
+@@ -85,7 +85,6 @@ static const struct cpuid_reg reverse_cpuid[] = {
+ 	[CPUID_6_EAX]         = {         6, 0, CPUID_EAX},
+ 	[CPUID_8000_000A_EDX] = {0x8000000a, 0, CPUID_EDX},
+ 	[CPUID_7_ECX]         = {         7, 0, CPUID_ECX},
+-	[CPUID_8000_0007_EBX] = {0x80000007, 0, CPUID_EBX},
+ 	[CPUID_7_EDX]         = {         7, 0, CPUID_EDX},
+ 	[CPUID_7_1_EAX]       = {         7, 1, CPUID_EAX},
+ 	[CPUID_12_EAX]        = {0x00000012, 0, CPUID_EAX},
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 7ed85f177320..aaff89db357f 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -6370,7 +6370,10 @@ split_irqchip_unlock:
+ 		break;
+ 	case KVM_CAP_X86_DISABLE_EXITS:
+ 		r = -EINVAL;
+-		if (cap->args[0] & ~KVM_X86_DISABLE_VALID_EXITS)
++		if (cap->args[0] & ~(KVM_X86_DISABLE_EXITS_MWAIT |
++				     KVM_X86_DISABLE_EXITS_HLT |
++				     KVM_X86_DISABLE_EXITS_PAUSE |
++				     KVM_X86_DISABLE_EXITS_CSTATE))
+ 			break;
+ 
+ 		if (cap->args[0] & KVM_X86_DISABLE_EXITS_PAUSE)

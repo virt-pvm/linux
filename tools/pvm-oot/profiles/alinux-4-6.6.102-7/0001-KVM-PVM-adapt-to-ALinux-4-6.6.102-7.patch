@@ -1,0 +1,67 @@
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index 96f19dc6b29b66e5357936876b6218a3dc9903b5..209f5f23f489ad0819b6530338782e554cccd68e 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -47,6 +47,7 @@
+ #include <linux/kern_levels.h>
+ #include <linux/kstrtox.h>
+ #include <linux/kthread.h>
++#include <linux/wordpart.h>
+ 
+ #include <asm/page.h>
+ #include <asm/memtype.h>
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index 5168ae3c5ee83b0813cf5f51c1468c072156b823..5df903d8932cbaae4e5248426ad815f501d1c36c 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -2613,13 +2613,11 @@ static int hva_to_pfn_remapped(struct vm_area_struct *vma,
+ 			       unsigned long addr, bool write_fault,
+ 			       bool *writable, kvm_pfn_t *p_pfn)
+ {
++	struct follow_pfnmap_args args = { .vma = vma, .address = addr };
+ 	kvm_pfn_t pfn;
+-	pte_t *ptep;
+-	pte_t pte;
+-	spinlock_t *ptl;
+ 	int r;
+ 
+-	r = follow_pte(vma->vm_mm, addr, &ptep, &ptl);
++	r = follow_pfnmap_start(&args);
+ 	if (r) {
+ 		/*
+ 		 * get_user_pages fails for VM_IO and VM_PFNMAP vmas and does
+@@ -2634,21 +2632,19 @@ static int hva_to_pfn_remapped(struct vm_area_struct *vma,
+ 		if (r)
+ 			return r;
+ 
+-		r = follow_pte(vma->vm_mm, addr, &ptep, &ptl);
++		r = follow_pfnmap_start(&args);
+ 		if (r)
+ 			return r;
+ 	}
+ 
+-	pte = ptep_get(ptep);
+-
+-	if (write_fault && !pte_write(pte)) {
++	if (write_fault && !args.writable) {
+ 		pfn = KVM_PFN_ERR_RO_FAULT;
+ 		goto out;
+ 	}
+ 
+ 	if (writable)
+-		*writable = pte_write(pte);
+-	pfn = pte_pfn(pte);
++		*writable = args.writable;
++	pfn = args.pfn;
+ 
+ 	/*
+ 	 * Get a reference here because callers of *hva_to_pfn* and
+@@ -2671,7 +2667,7 @@ static int hva_to_pfn_remapped(struct vm_area_struct *vma,
+ 		r = -EFAULT;
+ 
+ out:
+-	pte_unmap_unlock(ptep, ptl);
++	follow_pfnmap_end(&args);
+ 	*p_pfn = pfn;
+ 
+ 	return r;
