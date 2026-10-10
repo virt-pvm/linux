@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: GPL-2.0
 """Prepare a pinned OOT target; release orchestration belongs in the build repo."""
 import argparse
+from email import policy
+from email.parser import BytesParser
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tarfile
@@ -18,6 +21,21 @@ def sha256(path):
         for chunk in iter(lambda: stream.read(1024 * 1024), b''):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def validate_format_patch(path):
+    if path.is_symlink() or not path.is_file():
+        raise ValueError('patch must be a regular file: ' + path.name)
+    message = BytesParser(policy=policy.default).parsebytes(path.read_bytes())
+    envelope = message.get_unixfrom() or ''
+    body = message.get_payload(decode=True)
+    if not (re.fullmatch(r'From (?:[0-9a-f]{40}|[0-9a-f]{64}) '
+                         r'Mon Sep 17 00:00:00 2001', envelope)
+            and message['From'] and message['Date']
+            and str(message['Subject'] or '').startswith('[PATCH')
+            and isinstance(body, bytes)
+            and b'\n---\n' in body and b'\ndiff --git ' in body):
+        raise ValueError('patch is not git format-patch mail: ' + path.name)
 
 
 def tree_sha256(root, roots):
@@ -75,6 +93,7 @@ def prepare(args):
         if Path(name).name != name or not name.endswith('.patch'):
             raise ValueError('patch must be a local .patch file')
         path = profile_path.parent / name
+        validate_format_patch(path)
         if sha256(path) != patch['sha256']:
             raise ValueError('patch checksum mismatch: ' + name)
         patches.append(path)

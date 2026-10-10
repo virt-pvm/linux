@@ -1,0 +1,51 @@
+{
+  "format": 1,
+  "name": "amazon-linux-2023-6.18.54-121.166.amzn2023.x86_64",
+  "source": {
+    "repository": "https://github.com/virt-pvm/linux.git",
+    "commit": "d7518a5b7016186cce5f3f1951efb4ce347e6dc1",
+    "upstream_base": "71b35309f8698bb664dbed0028156c82b8ec79b8",
+    "export_roots": [
+      "arch/x86/kvm",
+      "arch/x86/include",
+      "include",
+      "virt/kvm",
+      "Documentation/virt/kvm/pvm-oot.rst"
+    ],
+    "export_tree_sha256": "f17af748e4444411ae97c00c0554c055738a6a5a156b295d4c2f0a0c3b1c2f6f"
+  },
+  "patches": [
+    {
+      "file": "0001-KVM-PVM-adapt-host-headers-and-config-for-Ubuntu-7.0.patch",
+      "sha256": "6c8b1fad73987ba2b079b5a0bf7686dbe924469ce3b718ac5cca0840485a3b78"
+    },
+    {
+      "file": "0002-KVM-use-the-target-hrtimer-setup-API.patch",
+      "sha256": "c69408f5cbac01c074d7edeb364338f81f829c8cde8a2d9b19284ee75945b13b"
+    },
+    {
+      "file": "0003-KVM-adapt-syscore-registration-to-the-target-API.patch",
+      "sha256": "66aa1d079e883a22751c213b24f187be48b1ff6bef34db7e91cee5e672220d8c"
+    },
+    {
+      "file": "0004-KVM-pass-the-eventfd-to-target-IRQ-bypass-registrati.patch",
+      "sha256": "509c406d48f977aabd7e4eca3b8a7d23b242e542b8aba8e09aef676a740ad8ab"
+    },
+    {
+      "file": "0005-KVM-PVM-bridge-target-core-only-exports-to-the-OOT-b.patch",
+      "sha256": "bd51f26f23be2a22f6618295a7c2c7d5de5570c25c7acdd33fa3b6335962f14c"
+    }
+  ],
+  "target": {
+    "distribution": "Amazon Linux 2023.12.20261016",
+    "architecture": "x86_64",
+    "kernel_release": "6.18.54-121.166.amzn2023.x86_64",
+    "compiler_version": "gcc (GCC) 11.5.0 20240719 (Red Hat 11.5.0-5)",
+    "files_sha256": {
+      ".config": "35f00cb4abe9379e579e9a6988e51db5fa4b04fecde10fd7a9b26f07b1bc99ad",
+      "Module.symvers": "43885e3fc88e71a9795733a18ce1d9a997b7a85c980bab5397f768d6bf352af1",
+      "include/generated/utsrelease.h": "33cfb8016339e2dd0f10e9aba57ecb92a079ebb92b92958997627576cb0f4eb4"
+    }
+  },
+  "qualification": "candidate; requalification required after any source, patch or target change"
+}

@@ -1,0 +1,151 @@
+From 4abe10d3f95b9e46bef34bc9110c8205791cb21b Mon Sep 17 00:00:00 2001
+Message-ID: <4abe10d3f95b9e46bef34bc9110c8205791cb21b.1792563944.git.houwenlong.hwl@antgroup.com>
+From: Hou Wenlong <houwenlong.hwl@antgroup.com>
+Date: Wed, 21 Oct 2026 14:25:44 +0800
+Subject: [PATCH] KVM: PVM: adapt OOT host to CentOS Stream 10
+
+Adapt the 6.12 PVM OOT source to the CentOS Stream 10
+6.12.0-267 host API.
+
+Assisted-by: Codex:GPT-5.6
+Signed-off-by: Hou Wenlong <houwenlong.hwl@antgroup.com>
+---
+ arch/x86/kvm/hrtimer.h                 |  3 +--
+ arch/x86/kvm/include/asm/cpuid.h       | 10 ++++++++++
+ arch/x86/kvm/include/asm/hyperv-tlfs.h |  6 ++++++
+ arch/x86/kvm/include/asm/vmx.h         |  8 ++++++++
+ arch/x86/kvm/include/linux/entry-kvm.h |  6 ++++++
+ arch/x86/kvm/include/linux/kvm_host.h  | 12 ++++++++++++
+ arch/x86/kvm/reverse_cpuid.h           |  1 -
+ virt/kvm/Makefile.kvm                  |  2 +-
+ virt/kvm/irqbypass.h                   |  3 +--
+ 9 files changed, 45 insertions(+), 6 deletions(-)
+ create mode 100644 arch/x86/kvm/include/asm/cpuid.h
+ create mode 100644 arch/x86/kvm/include/asm/hyperv-tlfs.h
+ create mode 100644 arch/x86/kvm/include/asm/vmx.h
+ create mode 100644 arch/x86/kvm/include/linux/entry-kvm.h
+
+diff --git a/arch/x86/kvm/hrtimer.h b/arch/x86/kvm/hrtimer.h
+index 8d40aa4f13c0..36ae00b4b7c1 100644
+--- a/arch/x86/kvm/hrtimer.h
++++ b/arch/x86/kvm/hrtimer.h
+@@ -7,7 +7,6 @@ static inline void kvm_hrtimer_init(struct hrtimer *timer, clockid_t clock,
+ 				    enum hrtimer_mode mode,
+ 				    enum hrtimer_restart (*callback)(struct hrtimer *))
+ {
+-	hrtimer_init(timer, clock, mode);
+-	timer->function = callback;
++	hrtimer_setup(timer, callback, clock, mode);
+ }
+ #endif
+diff --git a/arch/x86/kvm/include/asm/cpuid.h b/arch/x86/kvm/include/asm/cpuid.h
+new file mode 100644
+index 000000000000..bf36e2374898
+--- /dev/null
++++ b/arch/x86/kvm/include/asm/cpuid.h
+@@ -0,0 +1,10 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef PVM_OOT_ASM_CPUID_H
++#define PVM_OOT_ASM_CPUID_H
++#include "../../../../../arch/x86/include/asm/cpuid.h"
++
++#ifndef for_each_possible_hypervisor_cpuid_base
++#define for_each_possible_hypervisor_cpuid_base(function) \
++	for (function = 0x40000000; function < 0x40010000; function += 0x100)
++#endif
++#endif
+diff --git a/arch/x86/kvm/include/asm/hyperv-tlfs.h b/arch/x86/kvm/include/asm/hyperv-tlfs.h
+new file mode 100644
+index 000000000000..6fbc0ba1e9e7
+--- /dev/null
++++ b/arch/x86/kvm/include/asm/hyperv-tlfs.h
+@@ -0,0 +1,6 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef PVM_OOT_ASM_HYPERV_TLFS_H
++#define PVM_OOT_ASM_HYPERV_TLFS_H
++#include <hyperv/hvhdk.h>
++#include <hyperv/hvgdk.h>
++#endif
+diff --git a/arch/x86/kvm/include/asm/vmx.h b/arch/x86/kvm/include/asm/vmx.h
+new file mode 100644
+index 000000000000..5cf2e8cb7561
+--- /dev/null
++++ b/arch/x86/kvm/include/asm/vmx.h
+@@ -0,0 +1,8 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef PVM_OOT_ASM_VMX_H
++#define PVM_OOT_ASM_VMX_H
++#include_next <asm/vmx.h>
++#ifndef EPT_VIOLATION_RWX_SHIFT
++#define EPT_VIOLATION_RWX_SHIFT 3
++#endif
++#endif
+diff --git a/arch/x86/kvm/include/linux/entry-kvm.h b/arch/x86/kvm/include/linux/entry-kvm.h
+new file mode 100644
+index 000000000000..d18fd9b48435
+--- /dev/null
++++ b/arch/x86/kvm/include/linux/entry-kvm.h
+@@ -0,0 +1,6 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef PVM_OOT_LINUX_ENTRY_KVM_H
++#define PVM_OOT_LINUX_ENTRY_KVM_H
++#include <linux/entry-virt.h>
++#define xfer_to_guest_mode_handle_work(vcpu) xfer_to_guest_mode_handle_work()
++#endif
+diff --git a/arch/x86/kvm/include/linux/kvm_host.h b/arch/x86/kvm/include/linux/kvm_host.h
+index 91ec88d52df1..963a3aeac748 100644
+--- a/arch/x86/kvm/include/linux/kvm_host.h
++++ b/arch/x86/kvm/include/linux/kvm_host.h
+@@ -1,5 +1,17 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+ #ifndef __PVM_OOT_WRAPPER_ARCH_X86_KVM_INCLUDE_LINUX_KVM_HOST_H__
+ #define __PVM_OOT_WRAPPER_ARCH_X86_KVM_INCLUDE_LINUX_KVM_HOST_H__
++#define CONFIG_KVM_GENERIC_MMU_NOTIFIER 1
++#if defined(CONFIG_VIRT_XFER_TO_GUEST_WORK)
++#define CONFIG_KVM_XFER_TO_GUEST_WORK 1
++#endif
++#if defined(CONFIG_KVM_GUEST_MEMFD)
++#define CONFIG_KVM_PRIVATE_MEM 1
++#endif
+ #include "../../../../../include/linux/kvm_host.h"
++#ifndef KVM_X86_DISABLE_VALID_EXITS
++#define KVM_X86_DISABLE_VALID_EXITS (KVM_X86_DISABLE_EXITS_MWAIT | \
++	KVM_X86_DISABLE_EXITS_HLT | KVM_X86_DISABLE_EXITS_PAUSE | \
++	KVM_X86_DISABLE_EXITS_CSTATE)
++#endif
+ #endif
+diff --git a/arch/x86/kvm/reverse_cpuid.h b/arch/x86/kvm/reverse_cpuid.h
+index 0d17d6b70639..652f6807ac49 100644
+--- a/arch/x86/kvm/reverse_cpuid.h
++++ b/arch/x86/kvm/reverse_cpuid.h
+@@ -87,7 +87,6 @@ static const struct cpuid_reg reverse_cpuid[] = {
+ 	[CPUID_6_EAX]         = {         6, 0, CPUID_EAX},
+ 	[CPUID_8000_000A_EDX] = {0x8000000a, 0, CPUID_EDX},
+ 	[CPUID_7_ECX]         = {         7, 0, CPUID_ECX},
+-	[CPUID_8000_0007_EBX] = {0x80000007, 0, CPUID_EBX},
+ 	[CPUID_7_EDX]         = {         7, 0, CPUID_EDX},
+ 	[CPUID_7_1_EAX]       = {         7, 1, CPUID_EAX},
+ 	[CPUID_12_EAX]        = {0x00000012, 0, CPUID_EAX},
+diff --git a/virt/kvm/Makefile.kvm b/virt/kvm/Makefile.kvm
+index 724c89af78af..d047d4cf58c9 100644
+--- a/virt/kvm/Makefile.kvm
++++ b/virt/kvm/Makefile.kvm
+@@ -12,4 +12,4 @@ kvm-$(CONFIG_KVM_ASYNC_PF) += $(KVM)/async_pf.o
+ kvm-$(CONFIG_HAVE_KVM_IRQ_ROUTING) += $(KVM)/irqchip.o
+ kvm-$(CONFIG_HAVE_KVM_DIRTY_RING) += $(KVM)/dirty_ring.o
+ kvm-$(CONFIG_HAVE_KVM_PFNCACHE) += $(KVM)/pfncache.o
+-kvm-$(CONFIG_KVM_PRIVATE_MEM) += $(KVM)/guest_memfd.o
++kvm-$(CONFIG_KVM_GUEST_MEMFD) += $(KVM)/guest_memfd.o
+diff --git a/virt/kvm/irqbypass.h b/virt/kvm/irqbypass.h
+index 0424959fc979..b32e36757f27 100644
+--- a/virt/kvm/irqbypass.h
++++ b/virt/kvm/irqbypass.h
+@@ -6,7 +6,6 @@
+ static inline int kvm_irq_bypass_register_consumer(
+ 	struct irq_bypass_consumer *consumer, void *token)
+ {
+-	consumer->token = token;
+-	return irq_bypass_register_consumer(consumer);
++	return irq_bypass_register_consumer(consumer, token);
+ }
+ #endif
