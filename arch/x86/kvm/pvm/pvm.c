@@ -2571,7 +2571,7 @@ static inline void pvm_load_guest_xsave_state(struct kvm_vcpu *vcpu)
 {
 	kvm_load_guest_xsave_state(vcpu);
 
-	if (cpu_feature_enabled(X86_FEATURE_PKU)) {
+	if (cpu_feature_enabled(X86_FEATURE_OSPKE)) {
 		if (vcpu->arch.host_pkru)
 			write_pkru(0);
 	}
@@ -2581,7 +2581,7 @@ static inline void pvm_load_host_xsave_state(struct kvm_vcpu *vcpu)
 {
 	kvm_load_host_xsave_state(vcpu);
 
-	if (cpu_feature_enabled(X86_FEATURE_PKU)) {
+	if (cpu_feature_enabled(X86_FEATURE_OSPKE)) {
 		if (rdpkru() != vcpu->arch.host_pkru)
 			write_pkru(vcpu->arch.host_pkru);
 	}
@@ -2924,7 +2924,7 @@ static __init void pvm_set_cpu_caps(void)
 	 * for now, so enable guest PKU to keep guest xcr0 same as host xcr0 as
 	 * a temporary fix.
 	 */
-	if (boot_cpu_has(X86_FEATURE_XSAVE) && boot_cpu_has(X86_FEATURE_PKU))
+	if (boot_cpu_has(X86_FEATURE_XSAVE) && boot_cpu_has(X86_FEATURE_OSPKE))
 		kvm_cpu_cap_set(X86_FEATURE_PKU);
 }
 
