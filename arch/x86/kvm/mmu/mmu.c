@@ -2984,6 +2984,10 @@ static int mmu_set_spte(struct kvm_vcpu *vcpu, struct kvm_memory_slot *slot,
 	bool write_fault = fault && fault->write;
 
 	if (unlikely(is_noslot_pfn(pfn))) {
+		if (is_shadow_present_pte(*sptep)) {
+			drop_spte(vcpu->kvm, sptep);
+			kvm_flush_remote_tlbs_sptep(vcpu->kvm, sptep);
+		}
 		vcpu->stat.pf_mmio_spte_created++;
 		mark_mmio_spte(vcpu, sptep, gfn, pte_access);
 		return RET_PF_EMULATE;
