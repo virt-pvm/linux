@@ -7563,9 +7563,12 @@ static int kvm_write_guest_virt_helper(gva_t addr, void *val, unsigned int bytes
 			return X86EMUL_PROPAGATE_FAULT;
 		ret = kvm_vcpu_write_guest(vcpu, gpa, data, towrite);
 		if (ret < 0) {
+			/* __copy_to_user() may have written a partial fragment. */
+			kvm_mmu_track_write(vcpu, gpa, data, towrite);
 			r = X86EMUL_IO_NEEDED;
 			goto out;
 		}
+		kvm_page_track_write(vcpu, gpa, data, towrite);
 
 		bytes -= towrite;
 		data += towrite;
