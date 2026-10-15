@@ -1892,6 +1892,8 @@ static bool kvm_mmu_prepare_zap_page(struct kvm *kvm, struct kvm_mmu_page *sp,
 static void kvm_mmu_commit_zap_page(struct kvm *kvm,
 				    struct list_head *invalid_list);
 
+static bool is_obsolete_sp(struct kvm *kvm, struct kvm_mmu_page *sp);
+
 static bool sp_has_gptes(struct kvm_mmu_page *sp)
 {
 	if (sp->role.direct)
@@ -1902,6 +1904,23 @@ static bool sp_has_gptes(struct kvm_mmu_page *sp)
 
 	return true;
 }
+
+bool kvm_mmu_gfn_is_shadowed(struct kvm *kvm, gfn_t gfn)
+{
+	struct kvm_mmu_page *sp;
+
+	lockdep_assert_held(&kvm->mmu_lock);
+
+	hlist_for_each_entry(sp,
+			     &kvm->arch.mmu_page_hash[kvm_page_table_hashfn(gfn)],
+			     hash_link) {
+		if (sp->gfn == gfn && sp_has_gptes(sp) && !is_obsolete_sp(kvm, sp))
+			return true;
+	}
+
+	return false;
+}
+EXPORT_SYMBOL_GPL(kvm_mmu_gfn_is_shadowed);
 
 #define for_each_valid_sp(_kvm, _sp, _list)				\
 	hlist_for_each_entry(_sp, _list, hash_link)			\
@@ -2235,9 +2254,12 @@ static struct kvm_mmu_page *kvm_mmu_alloc_shadow_page(struct kvm *kvm,
 						      struct shadow_page_caches *caches,
 						      gfn_t gfn,
 						      struct hlist_head *sp_list,
-						      union kvm_mmu_page_role role)
+						      union kvm_mmu_page_role role,
+						      bool *pvcs_shadowed)
 {
 	struct kvm_mmu_page *sp;
+	struct kvm_vcpu *vcpu;
+	unsigned long i;
 
 	sp = kvm_mmu_memory_cache_alloc(caches->page_header_cache);
 	sp->spt = kvm_mmu_memory_cache_alloc(caches->shadow_page_cache);
@@ -2269,8 +2291,16 @@ static struct kvm_mmu_page *kvm_mmu_alloc_shadow_page(struct kvm *kvm,
 	sp->gfn = gfn;
 	sp->role = role;
 	hlist_add_head(&sp->hash_link, sp_list);
-	if (sp_has_gptes(sp))
+	if (sp_has_gptes(sp)) {
+		gfn_t pvcs_gfn;
+
 		account_shadowed(kvm, sp);
+		kvm_for_each_vcpu(i, vcpu, kvm) {
+			if (static_call(kvm_x86_pvcs_gfn)(vcpu, &pvcs_gfn) &&
+			    pvcs_gfn == gfn)
+				*pvcs_shadowed = true;
+		}
+	}
 
 	return sp;
 }
@@ -2284,6 +2314,7 @@ static struct kvm_mmu_page *__kvm_mmu_get_shadow_page(struct kvm *kvm,
 {
 	struct hlist_head *sp_list;
 	struct kvm_mmu_page *sp;
+	bool pvcs_shadowed = false;
 	bool created = false;
 
 	sp_list = &kvm->arch.mmu_page_hash[kvm_page_table_hashfn(gfn)];
@@ -2291,10 +2322,13 @@ static struct kvm_mmu_page *__kvm_mmu_get_shadow_page(struct kvm *kvm,
 	sp = kvm_mmu_find_shadow_page(kvm, vcpu, gfn, sp_list, role);
 	if (!sp) {
 		created = true;
-		sp = kvm_mmu_alloc_shadow_page(kvm, caches, gfn, sp_list, role);
+		sp = kvm_mmu_alloc_shadow_page(kvm, caches, gfn, sp_list, role,
+					       &pvcs_shadowed);
 	}
 
 	trace_kvm_mmu_get_page(sp, created);
+	if (pvcs_shadowed)
+		kvm_make_all_cpus_request(kvm, KVM_REQ_GPC_REFRESH);
 	return sp;
 }
 
@@ -5772,6 +5806,7 @@ void kvm_mmu_track_write(struct kvm_vcpu *vcpu, gpa_t gpa, const u8 *new,
 	kvm_mmu_remote_flush_or_zap(vcpu->kvm, &invalid_list, flush);
 	write_unlock(&vcpu->kvm->mmu_lock);
 }
+EXPORT_SYMBOL_GPL(kvm_mmu_track_write);
 
 int noinline kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa, u64 error_code,
 		       void *insn, int insn_len)

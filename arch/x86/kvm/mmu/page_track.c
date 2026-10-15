@@ -134,6 +134,7 @@ bool kvm_gfn_is_write_tracked(struct kvm *kvm,
 	index = gfn_to_index(gfn, slot->base_gfn, PG_LEVEL_4K);
 	return !!READ_ONCE(slot->arch.gfn_write_track[index]);
 }
+EXPORT_SYMBOL_GPL(kvm_gfn_is_write_tracked);
 
 #ifdef CONFIG_KVM_EXTERNAL_WRITE_TRACKING
 void kvm_page_track_cleanup(struct kvm *kvm)
@@ -172,6 +173,13 @@ int kvm_page_track_register_notifier(struct kvm *kvm,
 	write_lock(&kvm->mmu_lock);
 	hlist_add_head_rcu(&n->node, &head->track_notifier_list);
 	write_unlock(&kvm->mmu_lock);
+
+	/*
+	 * Out-of-band guest-memory writers resample the notifier list before
+	 * entering guest mode.  Force running vCPUs out and request a GPC refresh
+	 * so that no writes can escape the newly registered notifier.
+	 */
+	kvm_make_all_cpus_request(kvm, KVM_REQ_GPC_REFRESH);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(kvm_page_track_register_notifier);
@@ -221,6 +229,7 @@ void __kvm_page_track_write(struct kvm *kvm, gpa_t gpa, const u8 *new, int bytes
 			n->track_write(gpa, new, bytes, n);
 	srcu_read_unlock(&head->track_srcu, idx);
 }
+EXPORT_SYMBOL_GPL(__kvm_page_track_write);
 
 /*
  * Notify external page track nodes that a memory region is being removed from

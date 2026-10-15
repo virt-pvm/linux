@@ -10823,6 +10823,8 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 		goto cancel_injection;
 	}
 
+	static_call_cond(kvm_x86_update_direct_switch)(vcpu);
+
 	preempt_disable();
 
 	static_call(kvm_x86_prepare_switch_to_guest)(vcpu);

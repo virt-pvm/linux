@@ -22,6 +22,7 @@
 #include "cpuid.h"
 #include "lapic.h"
 #include "mmu.h"
+#include "mmu/page_track.h"
 #include "pmu.h"
 #include "trace.h"
 #include "x86.h"
@@ -459,6 +460,8 @@ static inline void host_gdt_restore_tls(void)
 {
 	native_load_tls(&current->thread, smp_processor_id());
 }
+
+static bool pvm_vcpu_struct_is_write_tracked(struct vcpu_pvm *pvm);
 
 static void pvm_prepare_switch_to_guest(struct kvm_vcpu *vcpu)
 {
@@ -1362,7 +1365,8 @@ static void update_exception_bitmap(struct kvm_vcpu *vcpu)
 		to_pvm(vcpu)->switch_flags &= ~SWITCH_FLAGS_SINGLE_STEP;
 }
 
-static struct pvm_vcpu_struct *pvm_get_vcpu_struct(struct vcpu_pvm *pvm)
+static struct pvm_vcpu_struct *pvm_get_vcpu_struct(struct vcpu_pvm *pvm,
+						   struct pvm_vcpu_struct *old)
 {
 	struct gfn_to_pfn_cache *gpc = &pvm->pvcs_gpc;
 
@@ -1376,17 +1380,77 @@ static struct pvm_vcpu_struct *pvm_get_vcpu_struct(struct vcpu_pvm *pvm)
 		read_lock_irq(&gpc->lock);
 	}
 
+	if (old)
+		memcpy(old, gpc->khva, sizeof(*old));
 	return (struct pvm_vcpu_struct *)(gpc->khva);
 }
 
-static void pvm_put_vcpu_struct(struct vcpu_pvm *pvm, bool dirty)
+static bool pvm_vcpu_struct_gfn(struct kvm_vcpu *vcpu, gfn_t *gfn)
+{
+	struct gfn_to_pfn_cache *gpc = &to_pvm(vcpu)->pvcs_gpc;
+	bool valid = false;
+
+	read_lock_irq(&gpc->lock);
+	if (kvm_gpc_check(gpc, PAGE_SIZE)) {
+		*gfn = gpa_to_gfn(gpc->gpa);
+		valid = true;
+	}
+	read_unlock_irq(&gpc->lock);
+
+	return valid;
+}
+
+static bool pvm_vcpu_struct_is_write_tracked(struct vcpu_pvm *pvm)
+{
+	struct kvm *kvm = pvm->vcpu.kvm;
+	bool write_tracked;
+	gfn_t gfn;
+
+	read_lock(&kvm->mmu_lock);
+	write_tracked = kvm_page_track_has_external_user(kvm) ||
+		(pvm_vcpu_struct_gfn(&pvm->vcpu, &gfn) &&
+		 kvm_mmu_gfn_is_shadowed(kvm, gfn));
+	read_unlock(&kvm->mmu_lock);
+
+	return write_tracked;
+}
+
+static void pvm_update_direct_switch(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_pvm *pvm = to_pvm(vcpu);
+
+	if (pvm_vcpu_struct_is_write_tracked(pvm))
+		pvm->switch_flags |= SWITCH_FLAGS_PVCS_WRITE_TRACKED;
+	else
+		pvm->switch_flags &= ~SWITCH_FLAGS_PVCS_WRITE_TRACKED;
+}
+
+static void pvm_put_vcpu_struct(struct vcpu_pvm *pvm,
+				struct pvm_vcpu_struct *old)
 {
 	struct gfn_to_pfn_cache *gpc = &pvm->pvcs_gpc;
+	struct pvm_vcpu_struct new;
+	gpa_t gpa = gpc->gpa;
+	unsigned int offset = 0;
 
+	if (old)
+		memcpy(&new, gpc->khva, sizeof(new));
 	read_unlock_irq(&gpc->lock);
-	if (dirty)
-		mark_page_dirty_in_slot(pvm->vcpu.kvm, gpc->memslot,
-					gpc->gpa >> PAGE_SHIFT);
+	if (!old)
+		return;
+
+	mark_page_dirty_in_slot(pvm->vcpu.kvm, gpc->memslot,
+				gpa_to_gfn(gpa));
+	while (offset < sizeof(new)) {
+		u64 old_value, new_value;
+
+		memcpy(&old_value, (u8 *)old + offset, sizeof(old_value));
+		memcpy(&new_value, (u8 *)&new + offset, sizeof(new_value));
+		if (old_value != new_value)
+			kvm_page_track_write(&pvm->vcpu, gpa + offset,
+					     (const u8 *)&new_value, sizeof(new_value));
+		offset += sizeof(new_value);
+	}
 }
 
 static void pvm_vcpu_gpc_refresh(struct kvm_vcpu *vcpu)
@@ -1397,8 +1461,8 @@ static void pvm_vcpu_gpc_refresh(struct kvm_vcpu *vcpu)
 	if (!gpc->active)
 		return;
 
-	if (pvm_get_vcpu_struct(pvm))
-		pvm_put_vcpu_struct(pvm, false);
+	if (pvm_get_vcpu_struct(pvm, NULL))
+		pvm_put_vcpu_struct(pvm, NULL);
 	else
 		kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
 }
@@ -1407,13 +1471,13 @@ static void pvm_event_flags_update(struct kvm_vcpu *vcpu, unsigned long set,
 				   unsigned long clear)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
-	static struct pvm_vcpu_struct *pvcs;
+	struct pvm_vcpu_struct old, *pvcs;
 	unsigned long old_flags, new_flags;
 
 	if (!pvm->msr_vcpu_struct)
 		return;
 
-	pvcs = pvm_get_vcpu_struct(pvm);
+	pvcs = pvm_get_vcpu_struct(pvm, &old);
 	if (!pvcs)
 		return;
 
@@ -1422,7 +1486,7 @@ static void pvm_event_flags_update(struct kvm_vcpu *vcpu, unsigned long set,
 	if (new_flags != old_flags)
 		pvcs->event_flags = new_flags;
 
-	pvm_put_vcpu_struct(pvm, new_flags != old_flags);
+	pvm_put_vcpu_struct(pvm, new_flags != old_flags ? &old : NULL);
 }
 
 /* handle pvm event per PVM Spec. */
@@ -1430,10 +1494,10 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 			  bool has_err_code, u64 err_code)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	struct pvm_vcpu_struct old, *pvcs;
 	unsigned long entry;
-	struct pvm_vcpu_struct *pvcs;
 
-	pvcs = pvm_get_vcpu_struct(pvm);
+	pvcs = pvm_get_vcpu_struct(pvm, &old);
 	if (!pvcs) {
 		kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
 		return 1;
@@ -1477,7 +1541,7 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 		 */
 		to_pvm(vcpu)->switch_flags |= SWITCH_FLAGS_IRQ_WIN;
 
-		pvm_put_vcpu_struct(pvm, true);
+		pvm_put_vcpu_struct(pvm, &old);
 
 		return 1;
 	}
@@ -1500,7 +1564,7 @@ static int __do_pvm_event(struct kvm_vcpu *vcpu, bool user, int vector,
 	if (vector == PF_VECTOR)
 		pvcs->cr2 = vcpu->arch.cr2;
 
-	pvm_put_vcpu_struct(pvm, true);
+	pvm_put_vcpu_struct(pvm, &old);
 
 	if (user)
 		switch_to_smod(vcpu);
@@ -1677,14 +1741,14 @@ static void pvm_setup_mce(struct kvm_vcpu *vcpu)
 static int handle_synthetic_instruction_return_user(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
-	struct pvm_vcpu_struct *pvcs;
+	struct pvm_vcpu_struct old, *pvcs;
 	unsigned long rflags;
 	u32 pending_async_exceptions;
 
 	/* switch to user mode before rsp changed. */
 	switch_to_umod(vcpu);
 
-	pvcs = pvm_get_vcpu_struct(pvm);
+	pvcs = pvm_get_vcpu_struct(pvm, &old);
 	if (!pvcs) {
 		kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
 		return 1;
@@ -1702,7 +1766,7 @@ static int handle_synthetic_instruction_return_user(struct kvm_vcpu *vcpu)
 	pvm->hw_ss = pvcs->user_ss | USER_RPL;
 	pvm_write_guest_gs_base(pvm, pvcs->user_gsbase);
 
-	pvm_put_vcpu_struct(pvm, true);
+	pvm_put_vcpu_struct(pvm, &old);
 
 	// Don't call kvm_set_rflags() with pvm_get_vcpu_struct() held
 	// which might be nesting the lock in pvm_set_rflags().
@@ -3035,6 +3099,8 @@ static struct kvm_x86_ops pvm_x86_ops __initdata = {
 	.vcpu_free = pvm_vcpu_free,
 	.vcpu_reset = pvm_vcpu_reset,
 
+	.pvcs_gfn = pvm_vcpu_struct_gfn,
+	.update_direct_switch = pvm_update_direct_switch,
 	.prepare_switch_to_guest = pvm_prepare_switch_to_guest,
 	.vcpu_load = pvm_vcpu_load,
 	.vcpu_put = pvm_vcpu_put,

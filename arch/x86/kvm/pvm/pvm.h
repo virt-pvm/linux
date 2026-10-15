@@ -15,10 +15,13 @@
  *	KVM_GUESTDBG_SINGLESTEP is set.
  * PVCS_INVALID:
  *	The GPC of PVCS is invalid and khva is NULL.
+ * PVCS_WRITE_TRACKED:
+ *	The PVCS page is write-tracked and must not be written by the switcher.
  */
 #define SWITCH_FLAGS_IRQ_WIN				_BITULL(8)
 #define SWITCH_FLAGS_SINGLE_STEP			_BITULL(9)
 #define SWITCH_FLAGS_PVCS_INVALID			_BITULL(10)
+#define SWITCH_FLAGS_PVCS_WRITE_TRACKED			_BITULL(11)
 
 #define SWITCH_FLAGS_INIT	(SWITCH_FLAGS_SMOD | SWITCH_FLAGS_PVCS_INVALID)
 
