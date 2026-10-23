@@ -18,6 +18,10 @@
     {
       "file": "0001-KVM-PVM-adapt-to-ALinux-4-6.6.102-7.patch",
       "sha256": "1f2c150bd4a4c368019f1ebe333a4583a7d0189c506d7b440362ffd50f41c93b"
+    },
+    {
+      "file": "0002-KVM-PVM-allow-read-only-memslots-with-new-config.patch",
+      "sha256": "72cbb485e56ba9caac7ef51a300f070a4f036200ac4f5528b1d8075f01ced753"
     }
   ],
   "target": {

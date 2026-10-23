@@ -1,0 +1,29 @@
+From a506e43174cfc6c55358be2ccfc2465a70701861 Mon Sep 17 00:00:00 2001
+Message-ID: <a506e43174cfc6c55358be2ccfc2465a70701861.1792758036.git.houwenlong.hwl@antgroup.com>
+From: Hou Wenlong <houwenlong.hwl@antgroup.com>
+Date: Fri, 23 Oct 2026 20:20:02 +0800
+Subject: [PATCH 2/2] KVM: PVM: honor CONFIG_HAVE_KVM_READONLY_MEM for OOT
+ builds
+
+Some 6.6 distribution headers omit the legacy UAPI feature
+macro while enabling CONFIG_HAVE_KVM_READONLY_MEM. Accept read-only
+memslots in that configuration so QEMU firmware can be mapped.
+
+Signed-off-by: Hou Wenlong <houwenlong.hwl@antgroup.com>
+---
+ virt/kvm/kvm_main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index 5168ae3c5ee8..46ac8d1b26fc 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -1549,7 +1549,7 @@ static int check_memory_region_flags(const struct kvm_userspace_memory_region *m
+ {
+ 	u32 valid_flags = KVM_MEM_LOG_DIRTY_PAGES;
+ 
+-#ifdef __KVM_HAVE_READONLY_MEM
++#if defined(__KVM_HAVE_READONLY_MEM) || defined(CONFIG_HAVE_KVM_READONLY_MEM)
+ 	valid_flags |= KVM_MEM_READONLY;
+ #endif
+ 
