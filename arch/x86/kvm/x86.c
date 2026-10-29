@@ -12488,7 +12488,7 @@ void kvm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 
 		vcpu->arch.pat = MSR_IA32_CR_PAT_DEFAULT;
 
-		vcpu->arch.msr_misc_features_enables = 0;
+		__kvm_set_msr(vcpu, MSR_MISC_FEATURES_ENABLES, 0, true);
 		vcpu->arch.ia32_misc_enable_msr = MSR_IA32_MISC_ENABLE_PEBS_UNAVAIL |
 						  MSR_IA32_MISC_ENABLE_BTS_UNAVAIL;
 

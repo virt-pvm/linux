@@ -12,6 +12,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/module.h>
+#include <linux/preempt.h>
 #include <linux/entry-kvm.h>
 
 #include <asm/gsseg.h>
@@ -201,23 +202,33 @@ static void set_cpuid_intercept(struct kvm_vcpu *vcpu)
 		__set_cpuid_faulting(true);
 }
 
-static void pvm_update_guest_cpuid_faulting(struct kvm_vcpu *vcpu, u64 data)
+static int pvm_update_guest_cpuid_faulting(struct kvm_vcpu *vcpu, struct msr_data *info)
 {
 	bool guest_enabled = cpuid_fault_enabled(vcpu);
-	bool set_enabled = data & MSR_MISC_FEATURES_ENABLES_CPUID_FAULT;
+	bool set_enabled = info->data & MSR_MISC_FEATURES_ENABLES_CPUID_FAULT;
 	struct vcpu_pvm *pvm = to_pvm(vcpu);
+	int ret;
 
-	if (!(guest_enabled ^ set_enabled))
-		return;
-	if (enable_cpuid_intercept)
-		return;
-	if (test_thread_flag(TIF_NOCPUID))
-		return;
+	/*
+	 * Update the guest MSR ledger and hardware MSR in one preemption-disabled
+	 * section. The vCPU preempt notifier can switch to host and consult the
+	 * ledger in reset_cpuid_intercept(); if it observes the new ledger before
+	 * the hardware MSR is updated, it can leave the old guest value active on
+	 * the host CPU.
+	 */
+	guard(preempt)();
 
-	preempt_disable();
-	if (pvm->loaded_cpu_state)
-		__set_cpuid_faulting(set_enabled);
-	preempt_enable();
+	ret = kvm_set_msr_common(vcpu, info);
+	if (ret)
+		return ret;
+
+	if (guest_enabled != set_enabled && !enable_cpuid_intercept &&
+	    !test_thread_flag(TIF_NOCPUID)) {
+		if (pvm->loaded_cpu_state)
+			__set_cpuid_faulting(set_enabled);
+	}
+
+	return 0;
 }
 
 /*
@@ -1064,9 +1075,7 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		pvm->msr_ia32_feature_control = data;
 		break;
 	case MSR_MISC_FEATURES_ENABLES:
-		ret = kvm_set_msr_common(vcpu, msr_info);
-		if (!ret)
-			pvm_update_guest_cpuid_faulting(vcpu, data);
+		ret = pvm_update_guest_cpuid_faulting(vcpu, msr_info);
 		break;
 	case MSR_PLATFORM_INFO:
 		if ((data & MSR_PLATFORM_INFO_CPUID_FAULT) &&
