@@ -3,7 +3,7 @@
   "name": "opencloudos-9.4-6.6.119-52.9.oc9.x86_64",
   "source": {
     "repository": "https://github.com/virt-pvm/linux.git",
-    "commit": "2b93c344e689377881e4c41fa2ffa34b89b75b7c",
+    "commit": "ad74ccef578032fb897df35cfc46c29d9d9c81ec",
     "upstream_base": "b4fc985ab6130cdc539eb2ba0f7e9786e8e1755f",
     "export_roots": [
       "arch/x86/kvm",
@@ -12,16 +12,12 @@
       "virt/kvm",
       "Documentation/virt/kvm/pvm-oot.rst"
     ],
-    "export_tree_sha256": "f9a3db531e4ba4f8985db72a93b7325ad88c43306e8f087feb39d2542f0462be"
+    "export_tree_sha256": "e2dec4ca198ef36e6483da069716cd2cae734a797e9411f4903494b9143c4ef5"
   },
   "patches": [
     {
       "file": "0001-KVM-PVM-Adapt-OOT-to-OpenCloudOS-9.4-6.6.119.patch",
       "sha256": "b094060366e52787faca9a792eb4c3295f2e3c9e83e44928d48b318bc7b19527"
-    },
-    {
-      "file": "0002-KVM-PVM-allow-read-only-memslots-with-new-config.patch",
-      "sha256": "72cbb485e56ba9caac7ef51a300f070a4f036200ac4f5528b1d8075f01ced753"
     }
   ],
   "target": {

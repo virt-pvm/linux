@@ -1,5 +1,21 @@
+From 36ea6b68f7f29bb49e6a50a969589fc3fb68acb9 Mon Sep 17 00:00:00 2001
+From: Hou Wenlong <houwenlong.hwl@antgroup.com>
+Date: Sat, 10 Oct 2026 16:37:17 +0800
+Subject: [PATCH] KVM: PVM: adapt to ALinux 4 6.6.102-7
+
+
+Include wordpart helpers and use the target follow_pfnmap APIs.
+Preserve write-access checks and PFN reference handling.
+
+Assisted-by: Codex:GPT-6.1
+Signed-off-by: Hou Wenlong <houwenlong.hwl@antgroup.com>
+---
+ arch/x86/kvm/mmu/mmu.c |  1 +
+ virt/kvm/kvm_main.c    | 18 +++++++-----------
+ 2 files changed, 8 insertions(+), 11 deletions(-)
+
 diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
-index 96f19dc6b29b66e5357936876b6218a3dc9903b5..209f5f23f489ad0819b6530338782e554cccd68e 100644
+index 96f19dc6b29b..209f5f23f489 100644
 --- a/arch/x86/kvm/mmu/mmu.c
 +++ b/arch/x86/kvm/mmu/mmu.c
 @@ -47,6 +47,7 @@
@@ -11,7 +27,7 @@ index 96f19dc6b29b66e5357936876b6218a3dc9903b5..209f5f23f489ad0819b6530338782e55
  #include <asm/page.h>
  #include <asm/memtype.h>
 diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
-index 5168ae3c5ee83b0813cf5f51c1468c072156b823..5df903d8932cbaae4e5248426ad815f501d1c36c 100644
+index 46ac8d1b26fc..e58e2f43158d 100644
 --- a/virt/kvm/kvm_main.c
 +++ b/virt/kvm/kvm_main.c
 @@ -2613,13 +2613,11 @@ static int hva_to_pfn_remapped(struct vm_area_struct *vma,

@@ -3,7 +3,7 @@
   "name": "ubuntu-24.04-6.8.0-139-generic",
   "source": {
     "repository": "https://github.com/virt-pvm/linux.git",
-    "commit": "81ef364558b11440e497cbc624ea3ece27196aa5",
+    "commit": "ad74ccef578032fb897df35cfc46c29d9d9c81ec",
     "upstream_base": "b4fc985ab6130cdc539eb2ba0f7e9786e8e1755f",
     "export_roots": [
       "arch/x86/kvm",
@@ -12,12 +12,12 @@
       "virt/kvm",
       "Documentation/virt/kvm/pvm-oot.rst"
     ],
-    "export_tree_sha256": "dc925f7974f2e3cd90b912cdf7d27b0ed03c1f9ad8daa3e68f93cbbfe0725ac8"
+    "export_tree_sha256": "e2dec4ca198ef36e6483da069716cd2cae734a797e9411f4903494b9143c4ef5"
   },
   "patches": [
     {
       "file": "0001-KVM-PVM-adapt-to-Ubuntu-24.04-6.8.0-139.patch",
-      "sha256": "9708c47153b7539742fe9394df824e0e3d3a714ec745d2f3c16c4f497d580a9a"
+      "sha256": "712bacc514721760135c3c2e6f7c8402defe8b0bc0e9df4f29d54b7c85e5f5c8"
     }
   ],
   "target": {

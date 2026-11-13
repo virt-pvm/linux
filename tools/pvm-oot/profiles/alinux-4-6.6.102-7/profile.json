@@ -3,7 +3,7 @@
   "name": "alinux-4-6.6.102-7.alnx4.x86_64",
   "source": {
     "repository": "https://github.com/virt-pvm/linux.git",
-    "commit": "81ef364558b11440e497cbc624ea3ece27196aa5",
+    "commit": "ad74ccef578032fb897df35cfc46c29d9d9c81ec",
     "upstream_base": "b4fc985ab6130cdc539eb2ba0f7e9786e8e1755f",
     "export_roots": [
       "arch/x86/kvm",
@@ -12,16 +12,12 @@
       "virt/kvm",
       "Documentation/virt/kvm/pvm-oot.rst"
     ],
-    "export_tree_sha256": "dc925f7974f2e3cd90b912cdf7d27b0ed03c1f9ad8daa3e68f93cbbfe0725ac8"
+    "export_tree_sha256": "e2dec4ca198ef36e6483da069716cd2cae734a797e9411f4903494b9143c4ef5"
   },
   "patches": [
     {
       "file": "0001-KVM-PVM-adapt-to-ALinux-4-6.6.102-7.patch",
-      "sha256": "1f2c150bd4a4c368019f1ebe333a4583a7d0189c506d7b440362ffd50f41c93b"
-    },
-    {
-      "file": "0002-KVM-PVM-allow-read-only-memslots-with-new-config.patch",
-      "sha256": "72cbb485e56ba9caac7ef51a300f070a4f036200ac4f5528b1d8075f01ced753"
+      "sha256": "b3296f7aed8736fab81a33271c6f5c5f9588d298a16ee77204de80f9f4694bc6"
     }
   ],
   "target": {
